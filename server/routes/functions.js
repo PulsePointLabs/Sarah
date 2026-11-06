@@ -164,6 +164,7 @@ functionsRouter.post('/openaiTTS', async (req, res) => {
     res.setHeader('X-TTS-Model', result.model);
     res.setHeader('X-TTS-Voice', result.voice);
     res.setHeader('X-TTS-Provider', result.provider || 'openai');
+    res.append('Access-Control-Expose-Headers', 'X-TTS-Provider, X-TTS-Fallback-From');
     if (result.fallbackFrom) res.setHeader('X-TTS-Fallback-From', result.fallbackFrom);
     res.setHeader('X-TTS-Speed', String(result.speed));
     res.setHeader('X-TTS-Format', result.format);

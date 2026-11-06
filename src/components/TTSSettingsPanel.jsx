@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Headphones, Loader2, Play, RotateCcw, Save, Square } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 import { Slider } from "@/components/ui/slider";
+import { syncSavedSarahVoicePreferences } from "@/lib/sarahVoicePreferences";
 import {
   DEFAULT_TTS_SETTINGS,
   getTTSMime,
@@ -115,13 +116,7 @@ export default function TTSSettingsPanel() {
 
   const selectProvider = (ttsProvider) => {
     stopSample();
-    const next = saveTTSSettings({ ...draftSettings, ttsProvider });
-    setSavedSettings(next);
-    setDraftSettings(next);
-    setMessage({
-      type: "ok",
-      text: `${ttsProvider === "openai" ? "OpenAI Nova" : "Local Sarah voice"} selected and applied everywhere.`,
-    });
+    save({ ...draftSettings, ttsProvider });
     if (ttsProvider === "local") refreshLocalHealth();
   };
 
@@ -154,11 +149,17 @@ export default function TTSSettingsPanel() {
     }
   };
 
-  const save = () => {
-    const next = saveTTSSettings(draftSettings);
+  const save = async (settings = draftSettings) => {
+    const next = saveTTSSettings(settings);
     setSavedSettings(next);
     setDraftSettings(next);
-    setMessage({ type: "ok", text: "TTS settings saved for all Sarah narration." });
+    setMessage({ type: "note", text: "Saved here. Syncing voice settings…" });
+    try {
+      await syncSavedSarahVoicePreferences({ tts: next });
+      setMessage({ type: "ok", text: "Voice settings synced with Sarah Chat." });
+    } catch {
+      setMessage({ type: "note", text: "Saved here. Sync will retry when Sarah reconnects." });
+    }
   };
 
   const reset = () => {
@@ -307,7 +308,7 @@ export default function TTSSettingsPanel() {
           {sampleState === "loading" ? <Loader2 className="h-4 w-4 animate-spin" /> : sampleState === "playing" ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
           {sampleState === "loading" ? "Preparing Sample" : sampleState === "playing" ? "Stop Sample" : "Play Sample"}
         </button>
-        <button type="button" onClick={save} className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
+        <button type="button" onClick={() => save()} className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
           <Save className="h-4 w-4" />
           Save
         </button>

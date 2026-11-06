@@ -6495,7 +6495,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           }
           if (active && voiceWakeEnabledRef.current) {
             setVoiceStatus(status + " " + armedStatus);
-            if (wakePlatform === "android" && status !== "No speech detected.") acknowledgeAndroidVoice(Boolean(command));
+            if (wakePlatform === "android" && status !== "No speech detected.") acknowledgeAndroidVoice();
             else playVoiceFeedback("start");
           }
         })().catch((error) => {

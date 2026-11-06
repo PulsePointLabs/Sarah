@@ -19,8 +19,16 @@ function Write-VoiceEvent {
 
 try {
   Add-Type -AssemblyName System.Speech
-  $culture = [System.Globalization.CultureInfo]::GetCultureInfo("en-US")
-  $engine = [System.Speech.Recognition.SpeechRecognitionEngine]::new($culture)
+  $recognizers = [System.Speech.Recognition.SpeechRecognitionEngine]::InstalledRecognizers()
+  $recognizer = $recognizers | Where-Object { $_.Culture.Name -eq "en-US" } | Select-Object -First 1
+  if (-not $recognizer) {
+    $recognizer = $recognizers | Where-Object { $_.Culture.TwoLetterISOLanguageName -eq "en" } | Select-Object -First 1
+  }
+  if (-not $recognizer) {
+    throw "Windows has no compatible English speech recognizer installed. Add English speech support in Windows Settings, then try Wake again."
+  }
+  $culture = $recognizer.Culture
+  $engine = [System.Speech.Recognition.SpeechRecognitionEngine]::new($recognizer)
   $engine.SetInputToDefaultAudioDevice()
   $engine.InitialSilenceTimeout = [TimeSpan]::FromSeconds(4)
   $engine.BabbleTimeout = [TimeSpan]::FromSeconds(2)

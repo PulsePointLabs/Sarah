@@ -5,7 +5,7 @@ import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Handler
 import android.os.Looper
-import android.speech.tts.TextToSpeech
+import android.os.SystemClock
 import com.getcapacitor.JSObject
 import com.getcapacitor.PermissionState
 import com.getcapacitor.Plugin
@@ -35,8 +35,8 @@ class SarahVoicePlugin : Plugin() {
     private var wanted = false
     private var pendingPermission: PluginCall? = null
     private var tone: ToneGenerator? = null
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
+    private var failures = 0
+    private val retry = Runnable { listen() }
 
     @PluginMethod
     fun start(call: PluginCall) = activity.runOnUiThread {
@@ -60,6 +60,7 @@ class SarahVoicePlugin : Plugin() {
 
     private fun enable(call: PluginCall) {
         wanted = true
+        failures = 0
         call.resolve()
         if (visible) listen() else emit("suspended")
     }
@@ -71,7 +72,6 @@ class SarahVoicePlugin : Plugin() {
         pendingPermission = null
         releaseSpeech()
         releaseTone()
-        tts?.stop()
         call.resolve()
     }
 
@@ -83,18 +83,14 @@ class SarahVoicePlugin : Plugin() {
 
     @PluginMethod
     fun acknowledge(call: PluginCall) = activity.runOnUiThread {
-        if (visible && wanted) {
-            val phrase = if (call.getBoolean("command") == true) "Command heard" else "Note saved"
-            if (!ttsReady || tts?.speak(phrase, TextToSpeech.QUEUE_FLUSH, null, phrase) != TextToSpeech.SUCCESS) {
-                playTone(ToneGenerator.TONE_PROP_ACK)
-            }
-        }
+        if (visible && wanted) playTone(ToneGenerator.TONE_PROP_ACK)
         call.resolve()
     }
 
     private fun playTone(type: Int) {
         releaseTone()
         try {
+            // Mix into the media stream without requesting audio focus.
             val player = ToneGenerator(AudioManager.STREAM_MUSIC, 28)
             tone = player
             player.startTone(type, 110)
@@ -106,6 +102,7 @@ class SarahVoicePlugin : Plugin() {
 
     override fun handleOnStart() {
         visible = true
+        failures = 0
         if (wanted) listen()
     }
 
@@ -113,7 +110,6 @@ class SarahVoicePlugin : Plugin() {
         visible = false
         releaseSpeech()
         releaseTone()
-        tts?.stop()
         if (wanted) emit("suspended")
     }
 
@@ -122,7 +118,6 @@ class SarahVoicePlugin : Plugin() {
         wanted = false
         releaseSpeech()
         releaseTone()
-        tts?.shutdown()
         model?.close()
         model = null
     }
@@ -150,6 +145,7 @@ class SarahVoicePlugin : Plugin() {
             recognizer = decoder
             val service = SpeechService(decoder, 16000f)
             speech = service
+            val startedAt = SystemClock.elapsedRealtime()
             val started = service.startListening(object : RecognitionListener {
                 override fun onPartialResult(hypothesis: String?) {}
                 override fun onFinalResult(hypothesis: String?) {}
@@ -159,28 +155,32 @@ class SarahVoicePlugin : Plugin() {
                     if (transcript.isNotEmpty()) emit("recognized", "transcript", transcript)
                 }
                 override fun onError(exception: Exception?) {
-                    if (speech === service) fail("Wake lost access to the microphone. Check microphone access and try again.")
+                    if (speech === service) recover(startedAt)
                 }
                 override fun onTimeout() {
-                    if (speech === service) fail("Wake listening stopped. Select Enable Wake to restart it.")
+                    if (speech === service) recover(startedAt)
                 }
             })
             if (!started) {
                 fail("Could not start continuous microphone capture.")
                 return
             }
-            if (tts == null) tts = TextToSpeech(context) { result ->
-                main.post {
-                    if (destroyed || result != TextToSpeech.SUCCESS) return@post
-                    ttsReady = tts?.voices.orEmpty().firstOrNull {
-                        it.locale.language == "en" && !it.isNetworkConnectionRequired
-                    }?.let { tts?.setVoice(it) == TextToSpeech.SUCCESS } ?: false
-                }
-            }
             emit("ready")
         } catch (_: Exception) {
             fail("Could not start continuous microphone capture. Check microphone access and try again.")
         }
+    }
+
+    private fun recover(startedAt: Long) {
+        if (SystemClock.elapsedRealtime() - startedAt > 15000) failures = 0
+        failures++
+        if (failures >= 4) {
+            fail("Wake lost access to the microphone. Check microphone access and try again.")
+            return
+        }
+        releaseSpeech()
+        emit("retrying")
+        main.postDelayed(retry, 500L * failures)
     }
 
     private fun fail(message: String) {
@@ -190,6 +190,7 @@ class SarahVoicePlugin : Plugin() {
     }
 
     private fun releaseSpeech() {
+        main.removeCallbacks(retry)
         val service = speech
         speech = null
         service?.stop()

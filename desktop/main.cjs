@@ -52,7 +52,6 @@ let backendUrl = '';
 let shutdownStarted = false;
 let bluetoothSelection = null;
 let desktopVoiceProcess = null;
-let desktopVoiceStopReason = '';
 let remoteClientMode = false;
 let remoteBackendCandidates = [];
 
@@ -146,9 +145,8 @@ function emitDesktopVoiceEvent(payload = {}) {
   mainWindow.webContents.send('voice-wake:event', payload);
 }
 
-function stopDesktopVoiceWake(reason = 'requested') {
+function stopDesktopVoiceWake() {
   if (!desktopVoiceProcess) return { ok: true, active: false };
-  desktopVoiceStopReason = reason;
   const processToStop = desktopVoiceProcess;
   desktopVoiceProcess = null;
   try {
@@ -357,7 +355,7 @@ ipcMain.handle('voice-wake:status', () => ({
   active: Boolean(desktopVoiceProcess),
 }));
 
-ipcMain.handle('voice-wake:stop', () => stopDesktopVoiceWake('requested'));
+ipcMain.handle('voice-wake:stop', () => stopDesktopVoiceWake());
 
 ipcMain.handle('voice-wake:start', () => {
   if (process.platform !== 'win32') {
@@ -372,7 +370,6 @@ ipcMain.handle('voice-wake:start', () => {
     return { ok: false, active: false, error: 'Desktop wake listener script is missing from this build.' };
   }
 
-  desktopVoiceStopReason = '';
   const child = spawn('powershell.exe', [
     '-NoLogo',
     '-NoProfile',
@@ -395,13 +392,14 @@ ipcMain.handle('voice-wake:start', () => {
       try {
         const payload = JSON.parse(trimmed);
         emitDesktopVoiceEvent(payload);
-      } catch (error) {
-        desktopLog(`Desktop voice stdout parse failed: ${error.message} :: ${trimmed.slice(0, 200)}`);
+      } catch {
+        desktopLog('Could not parse a Windows voice event.');
       }
     }
   };
 
   child.stdout.on('data', (chunk) => {
+    if (desktopVoiceProcess !== child) return;
     stdoutBuffer += chunk.toString('utf8');
     flushStdout();
   });
@@ -413,22 +411,14 @@ ipcMain.handle('voice-wake:start', () => {
   });
 
   child.once('exit', (code, signal) => {
-    if (desktopVoiceProcess === child) {
-      desktopVoiceProcess = null;
-    }
-    const expectedStop = Boolean(desktopVoiceStopReason);
-    const reason = desktopVoiceStopReason || (signal ? `signal:${signal}` : code === 0 ? 'completed' : 'error');
-    desktopVoiceStopReason = '';
-    emitDesktopVoiceEvent(expectedStop || code === 0
-      ? { type: 'stopped', reason, code, signal }
-      : { type: 'error', reason, code, signal, message: `Windows wake listener stopped (${signal || code || 'unknown'}).` });
+    if (desktopVoiceProcess !== child) return;
+    desktopVoiceProcess = null;
+    emitDesktopVoiceEvent({ type: 'stopped', code, signal });
   });
 
   child.once('error', (error) => {
-    if (desktopVoiceProcess === child) {
-      desktopVoiceProcess = null;
-    }
-    desktopVoiceStopReason = '';
+    if (desktopVoiceProcess !== child) return;
+    desktopVoiceProcess = null;
     emitDesktopVoiceEvent({ type: 'error', message: error.message || 'Could not start Windows wake listening.' });
   });
 

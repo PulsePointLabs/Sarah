@@ -41,12 +41,14 @@ import BodyExplorationDetail from './pages/BodyExplorationDetail';
 import NewBodyExploration from './pages/NewBodyExploration';
 import { incrementLifecycleMountCount, recordPwaLifecycleEvent } from '@/lib/pwaLifecycleDiagnostics';
 import { startSharedVitalImportBridge } from '@/lib/sharedVitalImport';
+import { refreshSarahVoicePreferences } from '@/lib/sarahVoicePreferences';
 
 const AuthenticatedApp = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const {
     isLoadingAuth,
+    isAuthenticated,
     isLoadingPublicSettings,
     authError,
     bootStatus,
@@ -64,6 +66,27 @@ const AuthenticatedApp = () => {
   useEffect(() => {
     incrementLifecycleMountCount('router_tree');
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let active = true;
+    async function syncVoice() {
+      let seed = true;
+      if (Capacitor.getPlatform() === 'android') {
+        const { App } = await import('@capacitor/app');
+        const info = await App.getInfo().catch(() => null);
+        seed = info?.id === 'com.pulsepointlabs.sarah';
+      }
+      if (active) await refreshSarahVoicePreferences({ seed });
+    }
+    syncVoice().catch(() => {});
+    const reconnect = () => syncVoice().catch(() => {});
+    window.addEventListener('online', reconnect);
+    return () => {
+      active = false;
+      window.removeEventListener('online', reconnect);
+    };
+  }, [isAuthenticated]);
 
   useEffect(() => {
     let stop = null;

@@ -14,6 +14,7 @@ import { mergeDatedChatFindings } from "@/lib/chatFindings";
 import { Button } from "@/components/ui/button";
 import { base44 } from "@/api/base44Client";
 import { cleanTextForSpeech, getTTSMime, getTTSRuntime, prepareTTSInput, splitIntoChunks, TTS_CHUNK_TARGET_CHARS, TTS_PLAYBACK_FORMAT } from "@/components/TTSButton";
+import { getSyncedSarahTTSRuntime } from "@/lib/sarahVoicePreferences";
 import { ANATOMICAL_REFERENCE_FOCUS_RULE, buildAIGroundingContext } from "@/lib/aiGrounding";
 import {
   extractVisualMediaContextFromConversation,
@@ -1002,6 +1003,7 @@ export default function AIChat({
   const playAudioUrl = (src, idx, requestId = ttsRequestIdRef.current, options = {}) => new Promise((resolve, reject) => {
     const {
       fromCache = false,
+      usedFallback = false,
       chunkIndex = 0,
       totalChunks = 1,
       finalChunk = true,
@@ -1036,7 +1038,7 @@ export default function AIChat({
     setCurrentTtsStatus(requestId, {
       idx,
       phase: "playing",
-      message: `${fromCache ? "Playing cached audio" : "Playing"}${suffix}`,
+      message: `${usedFallback ? "Playing Nova (local voice unavailable)" : fromCache ? "Playing cached audio" : "Playing"}${suffix}`,
       startedAt: Date.now(),
     });
     el.play().catch((error) => {
@@ -1066,9 +1068,11 @@ export default function AIChat({
         setCurrentTtsStatus(requestId, { idx, phase: "error", message: "Nothing to read", startedAt: Date.now() });
         return;
       }
-      runtime = getTTSRuntime();
+      runtime = await getSyncedSarahTTSRuntime();
+      if (requestId !== ttsRequestIdRef.current) return;
       const fetchPromises = new Map();
       const runtimeSignature = [
+        "chat-voice-v2",
         runtime.cacheProfile,
         runtime.model,
         runtime.format,
@@ -1128,6 +1132,7 @@ export default function AIChat({
           if (!audio) throw new Error(res.data?.error || "TTS returned no audio");
           const format = res.data?.format || runtime.format || TTS_PLAYBACK_FORMAT;
           const mimeType = getTTSMime(format);
+          if (res.data.fallback_from) return { src: `data:${mimeType};base64,${audio}`, usedFallback: true };
           const src = audioBase64ToObjectUrl(audio, mimeType);
           audioUrlCacheRef.current.set(cacheKey, src);
           putStoredTtsAudio({
@@ -1142,8 +1147,9 @@ export default function AIChat({
             createdAt: Date.now(),
           }).catch(() => {});
           return { src, fromCache: false };
-        })().finally(() => {
+        })().catch((error) => {
           fetchPromises.delete(chunkIndex);
+          throw error;
         });
         fetchPromises.set(chunkIndex, promise);
         return promise;
@@ -1154,11 +1160,9 @@ export default function AIChat({
         if (chunkIndex + 1 < chunks.length && !fetchPromises.has(chunkIndex + 1) && !audioUrlCacheRef.current.get(cacheKeyForChunk(chunks[chunkIndex + 1]))) {
           fetchChunkAudio(chunkIndex + 1, { showStatus: false }).catch(() => {});
         }
-        const { src, fromCache } = await fetchChunkAudio(chunkIndex, { showStatus: true });
+        const { src, fromCache, usedFallback } = await fetchChunkAudio(chunkIndex, { showStatus: true });
+        fetchPromises.delete(chunkIndex);
         if (requestId !== ttsRequestIdRef.current) return;
-        if (chunkIndex + 1 < chunks.length && !fetchPromises.has(chunkIndex + 1) && !audioUrlCacheRef.current.get(cacheKeyForChunk(chunks[chunkIndex + 1]))) {
-          fetchChunkAudio(chunkIndex + 1, { showStatus: false }).catch(() => {});
-        }
         setCurrentTtsStatus(requestId, {
           idx,
           phase: "ready",
@@ -1167,6 +1171,7 @@ export default function AIChat({
         });
         await playAudioUrl(src, idx, requestId, {
           fromCache,
+          usedFallback,
           chunkIndex,
           totalChunks: chunks.length,
           finalChunk: chunkIndex === chunks.length - 1,

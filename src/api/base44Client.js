@@ -124,6 +124,7 @@ async function invokeFunction(name, payload, options = {}) {
         audio: btoa(binary),
         model: response.headers.get('x-tts-model') || undefined,
         voice: response.headers.get('x-tts-voice') || undefined,
+        fallback_from: response.headers.get('x-tts-fallback-from') || undefined,
         speed: response.headers.get('x-tts-speed') || undefined,
         format: response.headers.get('x-tts-format') || undefined,
         latency_ms: response.headers.get('x-tts-latency-ms') || undefined,
@@ -196,6 +197,11 @@ export const base44 = {
   entities: Object.fromEntries(entityNames.map((name) => [name, entityApi(name)])),
   auth: {
     me: () => request('/auth/me', { timeoutMs: 7000 }),
+    voicePreferences: () => request('/auth/me/voice', { timeoutMs: 3500, skipApiDiscovery: true }),
+    updateVoicePreferences: (data, { seed = false } = {}) => request(`/auth/me/voice${seed ? '?seed=1' : ''}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data), timeoutMs: 3500,
+      skipApiDiscovery: true,
+    }),
     meFields: (fields = []) => {
       const params = new URLSearchParams();
       if (Array.isArray(fields) && fields.length) params.set('fields', fields.join(','));

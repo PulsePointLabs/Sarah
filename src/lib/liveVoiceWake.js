@@ -16,8 +16,8 @@ export function playAndroidWakeCue() {
   return androidVoice.cue().catch(() => {});
 }
 
-export function acknowledgeAndroidVoice(command) {
-  return androidVoice.acknowledge({ command }).catch(() => {});
+export function acknowledgeAndroidVoice() {
+  return androidVoice.acknowledge().catch(() => {});
 }
 
 export function connectLiveVoiceWake(platform, receive) {
@@ -106,6 +106,13 @@ export function connectLiveVoiceWake(platform, receive) {
     }
   }
 
+  async function startWindows() {
+    if (closed) return;
+    watchdog = setTimeout(() => fail("Windows speech did not start. Check the default mic and English speech pack."), 15000);
+    const result = await window.sarahDesktop.startVoiceWake();
+    if (!result?.ok) throw new Error(result?.error || "Windows speech could not start.");
+  }
+
   async function open() {
     if (platform === "android") {
       const handle = await androidVoice.addListener("speech", emit);
@@ -114,15 +121,28 @@ export function connectLiveVoiceWake(platform, receive) {
       opened = true;
       await androidVoice.start();
     } else if (platform === "windows") {
+      let startedAt = 0;
       unsubscribe = window.sarahDesktop.onVoiceWakeEvent((event) => {
-        if (event.type === "ready") clearTimeout(watchdog);
-        if (event.type === "stopped") fail("Windows speech stopped. Select Enable Wake to restart it.");
-        else emit(event);
+        if (event.type === "ready") {
+          clearTimeout(watchdog);
+          startedAt = Date.now();
+        }
+        if (event.type !== "stopped") {
+          emit(event);
+          return;
+        }
+        clearTimeout(watchdog);
+        if (startedAt && Date.now() - startedAt > 15000) failures = 0;
+        startedAt = 0;
+        if (++failures >= 4) {
+          fail("Windows speech could not recover. Check microphone access and try Wake again.");
+          return;
+        }
+        emit({ type: "retrying" });
+        timer = setTimeout(() => startWindows().catch((error) => fail(error.message)), 500 * failures);
       });
       opened = true;
-      watchdog = setTimeout(() => fail("Windows speech did not start. Check the default mic and English speech pack."), 15000);
-      const result = await window.sarahDesktop.startVoiceWake();
-      if (!result?.ok) throw new Error(result?.error || "Windows speech could not start.");
+      await startWindows();
     } else {
       const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!await Recognition.install(speechOptions)) {

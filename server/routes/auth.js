@@ -30,3 +30,26 @@ authRouter.get('/me', (req, res) => {
 authRouter.patch('/me', (req, res) => {
   res.json(upsertEntity('User', 'local-user', req.body || {}));
 });
+
+const voiceSettingId = 'sarah-voice-preferences';
+const voiceFields = ['tts', 'personality'];
+
+authRouter.get('/me/voice', (_req, res) => {
+  const current = getEntityFields('AppSetting', voiceSettingId, ['tts', 'personality']);
+  res.json(Object.fromEntries(voiceFields.filter((key) => current?.[key]).map((key) => [key, current[key]])));
+});
+
+authRouter.patch('/me/voice', (req, res) => {
+  const current = getEntityFields('AppSetting', voiceSettingId, voiceFields);
+  const changes = {};
+  for (const key of voiceFields) {
+    const value = req.body?.[key];
+    if (value && typeof value === 'object' && !Array.isArray(value) && (!req.query.seed || !current?.[key])) {
+      changes[key] = value;
+    }
+  }
+  const saved = Object.keys(changes).length
+    ? upsertEntity('AppSetting', voiceSettingId, { key: voiceSettingId, ...changes })
+    : current;
+  res.json(Object.fromEntries(voiceFields.filter((key) => saved?.[key]).map((key) => [key, saved[key]])));
+});

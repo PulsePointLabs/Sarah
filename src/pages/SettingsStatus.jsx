@@ -59,9 +59,11 @@ import {
   DEFAULT_SARAH_PERSONALITY,
   readSarahPersonalitySettings,
   SARAH_DETAIL_OPTIONS,
+  SARAH_PERSONALITY_EVENT,
   SARAH_TONE_PRESETS,
   saveSarahPersonalitySettings,
 } from "@/utils/sarahPersonality";
+import { syncSavedSarahVoicePreferences } from "@/lib/sarahVoicePreferences";
 import {
   DEFAULT_LIVE_CUE_CUSTOMIZATION,
   loadSyncedLiveCueCustomization,
@@ -671,6 +673,14 @@ export default function SettingsStatus() {
     return () => window.removeEventListener("sarah:stt-provider", handleSttProviderChange);
   }, []);
 
+  useEffect(() => {
+    const sync = (event) => {
+      if (!sarahPersonalityDirty) setSarahPersonality(event.detail);
+    };
+    window.addEventListener(SARAH_PERSONALITY_EVENT, sync);
+    return () => window.removeEventListener(SARAH_PERSONALITY_EVENT, sync);
+  }, [sarahPersonalityDirty]);
+
   const updateSttProviderPreference = (value) => {
     setSttProviderPreference(saveSttProviderPreference(value));
   };
@@ -1140,11 +1150,17 @@ export default function SettingsStatus() {
     setSarahPersonalityMessage("");
   };
 
-  const saveSarahPersonality = () => {
+  const saveSarahPersonality = async () => {
     const saved = saveSarahPersonalitySettings(sarahPersonality);
     setSarahPersonality(saved);
     setSarahPersonalityDirty(false);
-    setSarahPersonalityMessage("Sarah settings saved. New analyses will use this style.");
+    setSarahPersonalityMessage("Saved here. Syncing Sarah's delivery style…");
+    try {
+      await syncSavedSarahVoicePreferences({ personality: saved });
+      setSarahPersonalityMessage("Sarah's delivery style synced with Sarah Chat.");
+    } catch {
+      setSarahPersonalityMessage("Saved here. Sync will retry when Sarah reconnects.");
+    }
   };
 
   const resetSarahPersonality = () => {

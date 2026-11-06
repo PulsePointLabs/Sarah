@@ -6,7 +6,7 @@ import { normalizeNumericBandsForSpeech } from "@/utils/ttsTextNormalization";
 import { buildSarahTTSVoicePrompt, readSarahPersonalitySettings } from "@/utils/sarahPersonality";
 import { normalizeClinicalUnitsForSpeech } from "@/lib/ttsClinicalSpeech";
 
-const TTS_SETTINGS_KEY = "pulsepoint_tts_settings_v1";
+export const TTS_SETTINGS_KEY = "pulsepoint_tts_settings_v1";
 const TTS_REQUEST_TAIL = "\u200B";
 
 export const DEFAULT_TTS_SETTINGS = {
@@ -144,7 +144,7 @@ export function loadTTSSettings() {
   if (typeof localStorage === "undefined") return DEFAULT_TTS_SETTINGS;
   try {
     const saved = JSON.parse(localStorage.getItem(TTS_SETTINGS_KEY) || "null");
-    return normalizeTTSSettings(saved);
+    return normalizeTTSSettings(saved || undefined);
   } catch {
     return DEFAULT_TTS_SETTINGS;
   }
