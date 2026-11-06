@@ -116,11 +116,20 @@ object H10Collector {
     fun connect(id: String, callback: (CallbackResponse) -> Unit) = handler.post {
         if (enabled && address == id && device?.isConnected() == true) { callback(CallbackResponse(true, "")); return@post }
         if (endpoint.isBlank() || collectorId.isBlank()) { callback(CallbackResponse(false, "Configure the Sarah collector first")); return@post }
+        val previousAddress = address
+        val wasEnabled = enabled
         address = id
         enabled = true
+        try {
+            SarahCaptureService.start(app)
+        } catch (_: RuntimeException) {
+            address = previousAddress
+            enabled = wasEnabled
+            callback(CallbackResponse(false, "Android could not start background Polar capture. Bring Sarah to the foreground and try again."))
+            return@post
+        }
         app.getSharedPreferences("h10_collector", 0).edit().putString("address", id).putString("endpoint", endpoint)
             .putString("collectorId", collectorId).putString("deviceName", deviceName).putBoolean("enabled", true).apply()
-        SarahCaptureService.start(app)
         open(callback)
     }
 

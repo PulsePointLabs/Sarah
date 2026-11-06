@@ -52,10 +52,16 @@ class SarahCaptureService : Service() {
         }
 
         val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (error: RuntimeException) {
+            if (error !is SecurityException && error !is IllegalStateException) throw error
+            stopSelf(startId)
+            return START_NOT_STICKY
         }
         H10Collector.restore(applicationContext)
         OmronCollector.restore(applicationContext)
