@@ -1,13 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { Download, Play, Radio, Square, UploadCloud, Video } from "lucide-react";
+import { Download, Radio, Square, Video } from "lucide-react";
 import { Capacitor } from "@capacitor/core";
+import { Link } from "react-router-dom";
+import { apiUrl, discoverSarahApiBase } from "@/lib/mobileApiBase";
+import { bloodPressureFallsInSession, bloodPressureKey } from "@/lib/liveSessionBloodPressure";
+import { listRecentBloodPressure } from "@/lib/bloodPressure";
 import { saveBlobToAndroidDownloads } from "@/lib/nativeFileSaver";
 
-const CHUNK_SIZE = 4 * 1024 * 1024;
+const pendingSessionKey = "pulsepoint.localCapture.pendingSession";
+
+function readPendingSessions() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(pendingSessionKey) || "[]");
+    return Array.isArray(saved) ? saved.filter(record => record?.session_id) : [];
+  } catch { return []; }
+}
+
+function updateStoredSession(id, session) {
+  try {
+    const queue = readPendingSessions().filter(record => record.session_id !== id);
+    if (session) queue.push(session);
+    if (queue.length) localStorage.setItem(pendingSessionKey, JSON.stringify(queue));
+    else localStorage.removeItem(pendingSessionKey);
+  } catch {
+    // The local telemetry file still holds the capture when storage is full.
+  }
+}
 
 function pickRecorderMimeType() {
   const candidates = [
@@ -24,13 +44,6 @@ function extensionForMime(type = "") {
   return "webm";
 }
 
-function makeHash(file) {
-  if (!window.crypto?.subtle) return Promise.resolve(null);
-  return file.arrayBuffer()
-    .then((buffer) => window.crypto.subtle.digest("SHA-256", buffer))
-    .then((digest) => Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join(""));
-}
-
 function latestValue(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== "");
 }
@@ -40,7 +53,7 @@ function normalizeHrSample(sample = {}, fallbackTimeS = 0) {
   const hr = latestValue(sample.hr, sample.currentHr, sample.heart_rate_bpm, sample.value);
   if (hr == null) return null;
   return {
-    t: Number(sample.t ?? sample.time_s ?? fallbackTimeS) || 0,
+    t: fallbackTimeS,
     hr: Math.round(Number(hr)),
     hrv_rmssd_ms: latestValue(sample.hrv?.rmssdMs, sample.hrv_rmssd_ms, sample.rmssd_ms),
     source_at: sample.source_at || sample.measured_at || sample.timestamp || null,
@@ -53,495 +66,361 @@ function normalizeEmgSample(sample = {}, fallbackTimeS = 0) {
   const right = latestValue(sample.right, sample.right_pct);
   if (left == null && right == null) return null;
   return {
-    t: Number(sample.t ?? sample.time_s ?? fallbackTimeS) || 0,
+    t: fallbackTimeS,
     left_pct: left == null ? null : Number(left),
     right_pct: right == null ? null : Number(right),
     source_at: sample.source_at || sample.measured_at || sample.timestamp || null,
   };
 }
 
-function buildTelemetryPackage({
-  session,
-  sessionState,
-  startedAt,
-  stoppedAt,
-  startedPerfMs,
-  durationSeconds,
-  samples,
-  latestBp,
-  latestSpo2,
-}) {
-  const hrTimeline = samples.map((sample) => normalizeHrSample(sample.hr, sample.time_s)).filter(Boolean);
-  const emgTimeline = samples.map((sample) => normalizeEmgSample(sample.emg, sample.time_s)).filter(Boolean);
-  const bloodPressureSnapshots = [
-    ...(Array.isArray(session?.blood_pressure_readings) ? session.blood_pressure_readings : []),
-    ...(latestBp ? [latestBp] : []),
-  ].filter(Boolean);
-  const spo2Timeline = [
-    ...(Array.isArray(session?.pulse_ox_readings) ? session.pulse_ox_readings : []),
-    ...(latestSpo2 ? [latestSpo2] : []),
-  ].filter(Boolean);
 
+function buildTelemetryPackage({ session, stoppedAt, stoppedPerfMs, samples, videoFilename }) {
+  const hrTimeline = samples.map(sample => normalizeHrSample(sample.hr, sample.time_s)).filter(Boolean);
+  const emgTimeline = samples.map(sample => normalizeEmgSample(sample.emg, sample.time_s)).filter(Boolean);
+  const readings = [...session.bloodPressure.values()];
+  const window = { startMs: Date.parse(session.startedAt), endMs: Date.parse(stoppedAt), sessionId: session.id };
+  const bloodPressure = readings.filter(reading => bloodPressureFallsInSession(reading, window));
+  const unassigned = readings.filter(reading => !reading.measured_at || (reading.timestamp_source || reading.raw?.timestamp_source) === "received_at");
+  const spo2 = [...new Map(samples.filter(sample => sample.spo2?.measured_at)
+    .map(sample => [sample.spo2.measured_at, sample.spo2])).values()]
+    .filter(reading => {
+      const measured = Date.parse(reading.measured_at);
+      return measured >= window.startMs && measured <= window.endMs;
+    });
   return {
     schema_version: 1,
-    session_id: sessionState?.activeSessionId || session?.id || null,
-    recording_id: null,
-    video_start_timestamp: startedAt,
+    session_id: session.id,
+    capture_kind: session.kind,
+    video_filename: videoFilename,
+    video_start_timestamp: session.startedAt,
     video_stop_timestamp: stoppedAt,
-    monotonic_start_ms: startedPerfMs,
-    duration_seconds: durationSeconds,
-    channels: {
-      hr: hrTimeline.length > 0,
-      emg: emgTimeline.length > 0,
-      blood_pressure: bloodPressureSnapshots.length > 0,
-      spo2: spo2Timeline.length > 0,
-    },
+    monotonic_start_ms: session.startedPerfMs,
+    duration_seconds: (stoppedPerfMs - session.startedPerfMs) / 1000,
+    channels: { hr: hrTimeline.length > 0, emg: emgTimeline.length > 0, blood_pressure: bloodPressure.length > 0, spo2: spo2.length > 0 },
     samples,
-    annotations: Array.isArray(session?.event_timeline) ? session.event_timeline : [],
-    blood_pressure_snapshots: bloodPressureSnapshots,
-    spo2_timeline: spo2Timeline,
+    annotations: session.event_timeline,
+    blood_pressure_snapshots: bloodPressure,
+    blood_pressure_unassigned: unassigned,
+    spo2_timeline: spo2,
     hr_timeline: hrTimeline,
-    hrv_timeline: hrTimeline.filter((row) => row.hrv_rmssd_ms != null),
+    hrv_timeline: hrTimeline.filter(row => row.hrv_rmssd_ms != null),
     emg_timeline: emgTimeline,
     connection_gaps: [],
   };
 }
 
 export default function LiveSessionMobileRecorder({
-  activeSessionDoc,
-  liveSession,
-  ensureSession,
   phoneCaptureRef,
+  stopCaptureRef,
   onCameraAudioChange,
-  onCaptureBusyChange,
+  onCaptureStatus,
+  captureKind,
+  showSessionLink,
   wakeEnabled,
-  telemetryHistory = [],
   hrTelemetry,
   emgTelemetry,
-  latestBpReading,
   latestSpo2Reading,
 }) {
-  const local = Capacitor.getPlatform() === "android";
+  const android = Capacitor.getPlatform() === "android";
+  const [useCamera, setUseCamera] = useState(true);
   const [includeAudio, setIncludeAudio] = useState(false);
-  const [supported, setSupported] = useState(false);
-  const [capabilities, setCapabilities] = useState(null);
-  const [capabilityChecked, setCapabilityChecked] = useState(false);
-  const [recording, setRecording] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [status, setStatus] = useState("Ready to record a clean source video on this phone.");
-  const [progress, setProgress] = useState(0);
-  const [busy, setBusy] = useState(false);
-  const [rendered, setRendered] = useState(null);
-  const [job, setJob] = useState(null);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [phase, setPhase] = useState("idle");
+  const [status, setStatus] = useState("Ready to record.");
+  const [elapsed, setElapsed] = useState(0);
+  const [files, setFiles] = useState([]);
+  const [retryFiles, setRetryFiles] = useState(false);
+  const [queuedSessions, setQueuedSessions] = useState(readPendingSessions);
+  const [serverState, setServerState] = useState(null);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const recorderRef = useRef(null);
-  const chunksRef = useRef([]);
   const sampleTimerRef = useRef(null);
-  const sessionStateRef = useRef(null);
   const samplesRef = useRef([]);
-  const latestTelemetryRef = useRef({ hrTelemetry, emgTelemetry, latestBpReading, latestSpo2Reading });
-  const startRef = useRef({ iso: null, perfMs: 0 });
-  const pollRef = useRef(null);
-  const startingRef = useRef(false);
-  const localFilesRef = useRef([]);
-  const [retrySave, setRetrySave] = useState(false);
+  const phaseRef = useRef("idle");
+  const stopTimeRef = useRef(null);
+  const pendingFilesRef = useRef([]);
+  const pendingServerRef = useRef(queuedSessions);
+  const latestSessionIdRef = useRef(null);
+  const serverSaveInFlight = useRef(false);
+  const mountedRef = useRef(false);
+  const latestRef = useRef({});
+  latestRef.current = { hrTelemetry, emgTelemetry, latestSpo2Reading };
+
+  function setCapturePhase(next) {
+    phaseRef.current = next;
+    setPhase(next);
+    onCaptureStatus({ phase: next, startedAt: phoneCaptureRef.current?.startedAt || null });
+  }
 
   useEffect(() => {
-    onCaptureBusyChange(recording || busy || retrySave);
-  }, [busy, onCaptureBusyChange, recording, retrySave]);
-
-  useEffect(() => {
-    setSupported(Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder));
-  }, []);
-
-  useEffect(() => {
-    if (local) return undefined;
-    let cancelled = false;
-    setCapabilityChecked(false);
-    base44.integrations.Core.GetSessionVideoCapabilities()
-      .then((data) => {
-        if (cancelled) return;
-        setCapabilities(data || {});
-        setCapabilityChecked(true);
-        if (data?.ffmpeg_available) {
-          setStatus("Ready to record. Desktop video renderer is reachable.");
-        } else {
-          setStatus("Desktop video renderer is reachable, but FFmpeg is not available.");
-        }
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setCapabilities(null);
-        setCapabilityChecked(true);
-        setStatus(
-          error?.status === 404
-            ? "Phone recording is disabled because the desktop Sarah server is older than v0.1.7. Start the rebuilt desktop EXE first."
-            : error?.message || "Phone recording is disabled until the desktop render server is reachable."
-        );
-      });
+    mountedRef.current = true;
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
+      clearInterval(sampleTimerRef.current);
+      if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+      streamRef.current?.getTracks().forEach(track => track.stop());
+      stopCaptureRef.current = null;
     };
-  }, [local]);
+  }, [stopCaptureRef]);
+
+  useEffect(() => () => files.forEach(file => URL.revokeObjectURL(file.url)), [files]);
 
   useEffect(() => {
-    latestTelemetryRef.current = { hrTelemetry, emgTelemetry, latestBpReading, latestSpo2Reading };
-  }, [emgTelemetry, hrTelemetry, latestBpReading, latestSpo2Reading]);
+    if (!["starting", "recording", "saving"].includes(phase) && !retryFiles && !files.some(file => !file.downloaded)) return;
+    const warn = (event) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [files, phase, retryFiles]);
 
-  useEffect(() => () => {
-    if (pollRef.current) window.clearInterval(pollRef.current);
-    if (sampleTimerRef.current) window.clearInterval(sampleTimerRef.current);
-    streamRef.current?.getTracks?.().forEach((track) => track.stop());
-  }, []);
+  const cameraSupported = Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+  const recording = phase === "recording";
+  const busy = phase === "starting" || phase === "saving";
 
-  useEffect(() => () => {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-  }, [previewUrl]);
-
-  const sessionId = liveSession?.activeSessionId || activeSessionDoc?.id || null;
-  const elapsedText = useMemo(() => {
-    const min = Math.floor(elapsedSeconds / 60);
-    const sec = String(elapsedSeconds % 60).padStart(2, "0");
-    return `${min}:${sec}`;
-  }, [elapsedSeconds]);
-
-  const captureTelemetrySample = () => {
-    const startedPerf = startRef.current.perfMs || performance.now();
-    const timeS = Math.max(0, Number(((performance.now() - startedPerf) / 1000).toFixed(2)));
-    setElapsedSeconds(Math.floor(timeS));
-    const latest = latestTelemetryRef.current;
+  function sampleTelemetry() {
+    const session = phoneCaptureRef.current;
+    if (!session) return;
+    const seconds = Math.max(0, (performance.now() - session.startedPerfMs) / 1000);
+    setElapsed(Math.floor(seconds));
+    const latest = latestRef.current;
     samplesRef.current.push({
-      time_s: timeS,
+      time_s: Number(seconds.toFixed(2)),
       captured_at: new Date().toISOString(),
       hr: latest.hrTelemetry || null,
       emg: latest.emgTelemetry || null,
-      blood_pressure: latest.latestBpReading || null,
       spo2: latest.latestSpo2Reading || null,
     });
-  };
+  }
 
-  const uploadAndRender = async (blob, mimeType) => {
-    const stoppedAt = new Date().toISOString();
-    const durationSeconds = Math.max(1, Number(((performance.now() - startRef.current.perfMs) / 1000).toFixed(2)));
-    const ext = extensionForMime(mimeType);
-    const sessionState = sessionStateRef.current || liveSession || {};
-    const file = new File([blob], `sarah-mobile-session-${sessionState.activeSessionId || Date.now()}.${ext}`, { type: mimeType || blob.type || "video/webm" });
-    setBusy(true);
-    setRendered(null);
-    setProgress(2);
-    setStatus("Hashing clean source recording...");
-    const sha256 = await makeHash(file);
-    const telemetryPackage = buildTelemetryPackage({
-      session: activeSessionDoc,
-      sessionState,
-      startedAt: startRef.current.iso,
-      stoppedAt,
-      startedPerfMs: startRef.current.perfMs,
-      durationSeconds,
-      samples: samplesRef.current,
-      latestBp: latestTelemetryRef.current.latestBpReading,
-      latestSpo2: latestTelemetryRef.current.latestSpo2Reading,
-    });
-    const recordingRecord = await base44.integrations.Core.CreateSessionRecording({
-      session_id: sessionState.activeSessionId || activeSessionDoc?.id,
-      source_device_id: "sarah-android-apk-webview",
-      source_filename: file.name,
-      duration_seconds: durationSeconds,
-      audio_included: true,
-      camera_facing: "environment",
-      app_build: "sarah-apk-web-recorder",
-      telemetry_package: telemetryPackage,
-    });
-    const upload = await base44.integrations.Core.InitSessionVideoUpload({
-      recording_id: recordingRecord.id,
-      filename: file.name,
-      total_bytes: file.size,
-      chunk_size: CHUNK_SIZE,
-      sha256,
-    });
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-    for (let index = 0; index < totalChunks; index += 1) {
-      const start = index * CHUNK_SIZE;
-      const end = Math.min(file.size, start + CHUNK_SIZE);
-      setStatus(`Uploading source video ${index + 1}/${totalChunks}...`);
-      await base44.integrations.Core.UploadSessionVideoChunk({
-        uploadId: upload.id,
-        chunkIndex: index,
-        bytes: file.slice(start, end),
-      });
-      setProgress(Math.round(((index + 1) / totalChunks) * 44));
-    }
-    setStatus("Finalizing source upload...");
-    const finalized = await base44.integrations.Core.FinalizeSessionVideoUpload(upload.id);
-    setStatus("Desktop render queued...");
-    const started = await base44.integrations.Core.StartSessionVideoRender({
-      recording_id: finalized.recording.id,
-      session_id: finalized.recording.session_id,
-      preset_id: "telemetry_cockpit",
-      settings: {
-        title: "Sarah Session",
-        includeHr: true,
-        includeSpo2: true,
-        includeBp: true,
-        includeEmg: true,
-      },
-    });
-    setJob(started);
-    setProgress(50);
-    if (pollRef.current) window.clearInterval(pollRef.current);
-    pollRef.current = window.setInterval(async () => {
-      const next = await base44.integrations.Core.GetSessionVideoRenderJob(started.id);
-      setJob(next);
-      setProgress(Math.max(50, Math.min(100, Number(next?.progress?.percent ?? next?.progress?.current ?? 50))));
-      setStatus(next?.progress?.message || "Desktop render running...");
-      if (next.status === "complete") {
-        window.clearInterval(pollRef.current);
-        pollRef.current = null;
-        const renderedId = next?.result?.id || next?.result?.rendered_video_id;
-        if (renderedId) {
-          const metadata = await base44.integrations.Core.GetRenderedSessionVideo(renderedId);
-          setRendered(metadata);
-        }
-        setBusy(false);
-        setProgress(100);
-        setStatus("Finished video is ready on this phone.");
-      } else if (next.status === "error" || next.status === "cancelled") {
-        window.clearInterval(pollRef.current);
-        pollRef.current = null;
-        setBusy(false);
-        setStatus(next.error || "Desktop render stopped.");
-      }
-    }, 1400);
-  };
-
-  const saveLocalFiles = async () => {
-    setBusy(true);
-    setStatus("Saving to Downloads/Sarah…");
+  async function saveFiles() {
     try {
-      while (localFilesRef.current.length) {
-        const { blob, filename } = localFilesRef.current[0];
+      while (pendingFilesRef.current.length) {
+        const { blob, filename } = pendingFilesRef.current[0];
         await saveBlobToAndroidDownloads(blob, filename);
-        localFilesRef.current.shift();
+        pendingFilesRef.current.shift();
       }
-      setRetrySave(false);
-      setStatus("Video and telemetry saved to Downloads/Sarah.");
+      setRetryFiles(false);
+      setStatus("Files saved to Downloads/Sarah.");
     } catch (error) {
-      setRetrySave(true);
-      setStatus(error.message || "Save failed. Retry while Live Capture is open.");
-    } finally {
-      setBusy(false);
+      setRetryFiles(true);
+      setStatus(error.message || "File save failed. Retry while Live Capture is open.");
     }
-  };
+  }
 
-  const startRecording = async () => {
-    if (!readyToRecord || recording || busy || retrySave || startingRef.current) return;
-    startingRef.current = true;
-    setBusy(true);
-    try {
-      await openRecording();
-    } catch (error) {
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-      phoneCaptureRef.current = null;
-      onCameraAudioChange(false);
-      setStatus(error.message || "Could not start the camera. Check camera and microphone permissions.");
-    } finally {
-      startingRef.current = false;
-      setBusy(false);
-    }
-  };
-
-  const openRecording = async () => {
-    if (!local) {
-      setStatus("Connecting to the active Sarah session…");
-      const sessionState = liveSession?.active ? liveSession : await ensureSession?.();
-      if (!sessionState?.activeSessionId) throw new Error("Start OBS before using the desktop render workflow.");
-      sessionStateRef.current = sessionState;
-    }
-    const audio = !local || includeAudio;
-    onCameraAudioChange(audio);
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio,
-      video: {
-        facingMode: { ideal: "environment" },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        frameRate: { ideal: 30, max: 30 },
-      },
-    });
-    streamRef.current = stream;
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(() => {});
-    }
-    chunksRef.current = [];
-    samplesRef.current = (local ? [] : telemetryHistory.slice(-240)).map((point) => ({
-      time_s: Number(point.t ?? point.time_s ?? 0) || 0,
-      captured_at: point.captured_at || new Date().toISOString(),
-      hr: point,
-      emg: point,
-    }));
-    const mimeType = pickRecorderMimeType();
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    recorderRef.current = recorder;
-    startRef.current = { iso: new Date().toISOString(), perfMs: performance.now() };
-    if (local) {
-      phoneCaptureRef.current = {
-        startedAt: startRef.current.iso,
-        id: crypto.randomUUID(),
-        event_timeline: [],
-      };
-    }
-    recorder.ondataavailable = (event) => {
-      if (event.data?.size) chunksRef.current.push(event.data);
+  async function saveServer() {
+    if (!pendingServerRef.current.length || serverSaveInFlight.current) return;
+    serverSaveInFlight.current = true;
+    setServerState({ state: "saving" });
+    const post = async (record) => {
+      const response = await fetch(apiUrl("/live-capture/camera-session"), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(record), signal: AbortSignal.timeout(5000),
+      });
+      const saved = await response.json().catch(() => ({}));
+      if (!response.ok || !saved.ok || saved.id !== record.session_id) {
+        throw new Error(saved.error || "Sarah did not confirm the session save.");
+      }
+      return saved;
     };
-    recorder.onstop = () => {
-      const finalMime = recorder.mimeType || mimeType || "video/webm";
-      const blob = new Blob(chunksRef.current, { type: finalMime });
-      const localUrl = URL.createObjectURL(blob);
-      setPreviewUrl(localUrl);
-      streamRef.current?.getTracks?.().forEach((track) => track.stop());
-      streamRef.current = null;
-      if (videoRef.current) videoRef.current.srcObject = null;
-      if (sampleTimerRef.current) window.clearInterval(sampleTimerRef.current);
-      sampleTimerRef.current = null;
-      setRecording(false);
-      onCameraAudioChange(false);
-      if (local) {
-        const session = phoneCaptureRef.current;
-        phoneCaptureRef.current = null;
-        if (!blob.size) {
-          setStatus("The camera returned an empty recording.");
+    try {
+      let latestSaved;
+      for (const record of [...pendingServerRef.current]) {
+        let saved;
+        try {
+          saved = await post(record);
+        } catch (error) {
+          if (!android) throw error;
+          await discoverSarahApiBase({ timeoutMs: 1200 });
+          saved = await post(record);
+        }
+        pendingServerRef.current = pendingServerRef.current.filter(item => item.session_id !== record.session_id);
+        updateStoredSession(record.session_id, null);
+        setQueuedSessions(pendingServerRef.current);
+        if (!latestSessionIdRef.current || latestSessionIdRef.current === record.session_id) latestSaved = saved;
+      }
+      setServerState(latestSaved ? { state: "saved", ...latestSaved } : null);
+    } catch {
+      setServerState({ state: "pending" });
+    } finally { serverSaveInFlight.current = false; }
+  }
+
+  useEffect(() => {
+    if (!queuedSessions.length) return undefined;
+    const retry = () => { void saveServer(); };
+    window.addEventListener("online", retry);
+    const timer = setInterval(retry, 30000);
+    return () => { clearInterval(timer); window.removeEventListener("online", retry); };
+  }, [queuedSessions.length]);
+
+  async function finishCapture(blob) {
+    if (phaseRef.current === "recording") setCapturePhase("saving");
+    clearInterval(sampleTimerRef.current);
+    streamRef.current?.getTracks().forEach(track => track.stop());
+    streamRef.current = null;
+    recorderRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    onCameraAudioChange(false);
+    const session = phoneCaptureRef.current;
+    phoneCaptureRef.current = null;
+    if (!session) return;
+    const stopped = stopTimeRef.current || { iso: new Date().toISOString(), perf: performance.now() };
+    // A cuff may be connected to another device and save just before Stop.
+    const recent = await listRecentBloodPressure(100, { signal: AbortSignal.timeout(1800) }).catch(() => null);
+    for (const reading of recent?.readings || []) {
+      session.bloodPressure.set(bloodPressureKey(reading), reading);
+    }
+    const stem = `sarah-capture-${session.startedAt.replace(/[:.]/g, "-")}`;
+    const videoFilename = blob?.size ? `${stem}.${extensionForMime(blob.type)}` : null;
+    const telemetry = buildTelemetryPackage({
+      session, stoppedAt: stopped.iso, stoppedPerfMs: stopped.perf, samples: samplesRef.current, videoFilename,
+    });
+    const artifacts = [
+      ...(videoFilename ? [{ blob, filename: videoFilename }] : []),
+      { blob: new Blob([JSON.stringify(telemetry)], { type: "application/json" }), filename: `${stem}.json` },
+    ];
+    const { samples: _samples, blood_pressure_unassigned: _unassigned, ...record } = telemetry;
+    latestSessionIdRef.current = record.session_id;
+    pendingServerRef.current = [...pendingServerRef.current, record];
+    setQueuedSessions(pendingServerRef.current);
+    updateStoredSession(record.session_id, record);
+    void saveServer();
+    if (android) {
+      pendingFilesRef.current = artifacts;
+      await saveFiles();
+      if (blob && !videoFilename) setStatus(previous => `Camera returned no video. ${previous}`);
+    } else {
+      setFiles(artifacts.map(file => ({ ...file, url: URL.createObjectURL(file.blob), downloaded: false })));
+      setStatus(blob && !videoFilename
+        ? "Camera returned no video. Telemetry is ready to download."
+        : "Recording ended. Download your files below.");
+    }
+    setCapturePhase("saved");
+  }
+
+  async function startRecording() {
+    if (["starting", "recording", "saving"].includes(phaseRef.current)) return;
+    if (retryFiles || (useCamera && (!cameraSupported || includeAudio && wakeEnabled))) return;
+    if (files.some(file => !file.downloaded)
+      && !window.confirm("The previous capture still has files to download. Start a new capture anyway?")) return;
+    setCapturePhase("starting");
+    setStatus(useCamera ? "Opening camera…" : "Starting telemetry…");
+    stopTimeRef.current = null;
+    try {
+      let recorder;
+      if (useCamera) {
+        onCameraAudioChange(includeAudio);
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: includeAudio,
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
+        });
+        if (!mountedRef.current) {
+          stream.getTracks().forEach(track => track.stop());
           return;
         }
-        const startedAt = startRef.current.iso;
-        const durationSeconds = (performance.now() - startRef.current.perfMs) / 1000;
-        const telemetry = buildTelemetryPackage({
-          session,
-          startedAt,
-          stoppedAt: new Date().toISOString(),
-          startedPerfMs: startRef.current.perfMs,
-          durationSeconds,
-          samples: samplesRef.current,
-          latestBp: latestTelemetryRef.current.latestBpReading,
-          latestSpo2: latestTelemetryRef.current.latestSpo2Reading,
-        });
-        const stem = `sarah-phone-${startedAt.replace(/[:.]/g, "-")}`;
-        localFilesRef.current = [
-          { blob, filename: `${stem}.${extensionForMime(finalMime)}` },
-          { blob: new Blob([JSON.stringify(telemetry)], { type: "application/json" }), filename: `${stem}.json` },
-        ];
-        void saveLocalFiles();
-        return;
+        streamRef.current = stream;
+        const mimeType = pickRecorderMimeType();
+        recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        recorderRef.current = recorder;
+        const chunks = [];
+        recorder.ondataavailable = (event) => { if (event.data?.size) chunks.push(event.data); };
+        recorder.onstop = () => {
+          const finalMime = recorder.mimeType || mimeType || "video/webm";
+          void finishCapture(new Blob(chunks, { type: finalMime }));
+        };
+        recorder.onerror = () => {
+          setStatus("Camera stream interrupted. Saving what was recorded…");
+          stopRecording();
+        };
+        recorder.start(1000);
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
+        }
       }
-      uploadAndRender(blob, finalMime).catch((error) => {
-        setBusy(false);
-        setStatus(error?.message || "Could not upload/render the phone recording.");
-      });
-    };
-    recorder.start(1500);
-    captureTelemetrySample();
-    sampleTimerRef.current = window.setInterval(captureTelemetrySample, 1000);
-    setRecording(true);
-    setProgress(0);
-    setStatus("Recording clean phone video. Telemetry is being timestamped separately.");
-  };
-
-  const stopRecording = () => {
-    if (recorderRef.current?.state === "recording") {
-      setStatus("Stopping phone recording...");
-      recorderRef.current.stop();
+      setServerState(null);
+      setFiles([]);
+      samplesRef.current = [];
+      phoneCaptureRef.current = {
+        id: crypto.randomUUID?.() || Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join(""),
+        kind: captureKind, startedAt: new Date().toISOString(),
+        startedPerfMs: performance.now(), event_timeline: [], bloodPressure: new Map(),
+      };
+      sampleTelemetry();
+      sampleTimerRef.current = window.setInterval(sampleTelemetry, 1000);
+      setCapturePhase("recording");
+      setStatus(useCamera ? "Recording camera and telemetry." : "Recording telemetry.");
+    } catch (error) {
+      streamRef.current?.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+      recorderRef.current = null;
+      onCameraAudioChange(false);
+      setCapturePhase("idle");
+      setStatus(error.message || "Could not start capture. Check camera and microphone permissions.");
     }
-  };
+  }
 
-  const readyToRecord = supported && (local || Boolean(capabilities?.ffmpeg_available));
+  function stopRecording() {
+    if (phaseRef.current !== "recording") return;
+    stopTimeRef.current = { iso: new Date().toISOString(), perf: performance.now() };
+    clearInterval(sampleTimerRef.current);
+    setCapturePhase("saving");
+    setStatus("Recording stopped. Preparing files…");
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    else if (!recorderRef.current) void finishCapture(null);
+  }
+
+  stopCaptureRef.current = stopRecording;
 
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-primary">
-            <Video className="h-4 w-4" /> Phone Session Recording
-          </p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {local ? "Record on this phone. Video and timestamped telemetry go to Downloads/Sarah." : "Record camera video into the active OBS session and render it on the Sarah server."}
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Badge variant={supported ? "default" : "secondary"}>{supported ? "Camera available" : "Camera unavailable"}</Badge>
-            {!local && <Badge variant={capabilities?.ffmpeg_available ? "default" : "secondary"}>
-              {!capabilityChecked ? "Checking desktop" : capabilities?.ffmpeg_available ? "Desktop renderer ready" : "Desktop renderer unavailable"}
-            </Badge>}
-            {sessionId && <Badge variant="outline">Session {String(sessionId).slice(0, 8)}</Badge>}
-            {recording && <Badge variant="destructive">Recording {elapsedText}</Badge>}
-            {job?.status && <Badge variant="outline">Render {job.status}</Badge>}
-          </div>
+    <section className="space-y-4 rounded-xl border border-border bg-card p-4" aria-label="Local capture">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-base font-semibold"><Video className="h-4 w-4 text-primary" /> Camera &amp; Telemetry Capture</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Capture on this device. Sarah saves the session record to your server when reachable.</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {local && !recording && <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={includeAudio} disabled={busy || (wakeEnabled && !includeAudio)} onChange={(event) => setIncludeAudio(event.target.checked)} />
-            Camera audio
-          </label>}
-          {retrySave && <Button type="button" variant="secondary" onClick={saveLocalFiles} disabled={busy}>Retry save</Button>}
-          {!recording ? (
-            <Button type="button" onClick={startRecording} disabled={!readyToRecord || busy || retrySave || (local && includeAudio && wakeEnabled)}>
-              <Radio className="mr-2 h-4 w-4" />
-              Start Phone Recording
-            </Button>
-          ) : (
-            <Button type="button" variant="destructive" onClick={stopRecording}>
-              <Square className="mr-2 h-4 w-4" />
-              {local ? "Stop & Save" : "Stop & Render"}
-            </Button>
-          )}
-        </div>
+        {recording && <Badge variant="destructive">Recording {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}</Badge>}
       </div>
-      {local && <p className="mt-2 text-xs text-muted-foreground">Leave camera audio off to use Sarah’s wake microphone during recording.</p>}
-
-      <div className={`mt-4 grid gap-4 ${recording ? "lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.9fr)]" : ""}`}>
-        <div hidden={!recording} className="overflow-hidden rounded-lg border border-border bg-black">
-          <video ref={videoRef} className="aspect-video w-full object-contain" muted playsInline autoPlay />
-        </div>
-        <div className="space-y-3">
-          <div className="rounded-lg border border-border bg-muted/20 p-3">
-            <p role="status" className="text-sm text-muted-foreground">{status}</p>
-            {!local && <Progress value={progress} className="mt-3" />}
-            {busy && (
-              <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-                <UploadCloud className="h-3.5 w-3.5" />
-                {local ? "Keep Live Capture open until saving completes." : "Keep this page open until upload/render completes."}
-              </p>
-            )}
-          </div>
-          {previewUrl && (
-            <div className="rounded-lg border border-border bg-muted/20 p-3">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Clean source preview</p>
-              <video className="max-h-56 w-full rounded bg-black" controls src={previewUrl} />
-            </div>
-          )}
-          {rendered && (
-            <div className="rounded-lg border border-primary/25 bg-primary/10 p-3">
-              <p className="text-sm font-semibold text-foreground">Finished telemetry video ready</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button asChild size="sm" variant="secondary">
-                  <a href={base44.integrations.Core.renderedSessionVideoStreamUrl(rendered.id)} target="_blank" rel="noreferrer">
-                    <Play className="mr-2 h-4 w-4" />
-                    Preview
-                  </a>
-                </Button>
-                <Button asChild size="sm">
-                  <a href={base44.integrations.Core.renderedSessionVideoDownloadUrl(rendered.id)}>
-                    <Download className="mr-2 h-4 w-4" />
-                    Download
-                  </a>
-                </Button>
-              </div>
-              <video className="mt-3 max-h-56 w-full rounded bg-black" controls src={base44.integrations.Core.renderedSessionVideoStreamUrl(rendered.id)} />
-            </div>
-          )}
-        </div>
+      <div className="flex flex-wrap items-center gap-4">
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={useCamera} disabled={busy || recording} onChange={event => setUseCamera(event.target.checked)} />
+          Record camera
+        </label>
+        {useCamera && <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={includeAudio} disabled={busy || recording || (wakeEnabled && !includeAudio)} onChange={event => setIncludeAudio(event.target.checked)} />
+          Camera audio
+        </label>}
+        {recording
+          ? <Button type="button" variant="destructive" onClick={stopRecording}><Square className="mr-2 h-4 w-4" /> Stop &amp; Save</Button>
+          : <Button type="button" onClick={startRecording} disabled={busy || retryFiles || (useCamera && (!cameraSupported || includeAudio && wakeEnabled))}>
+              <Radio className="mr-2 h-4 w-4" /> {useCamera ? "Start Camera Recording" : "Start Telemetry Recording"}
+            </Button>}
       </div>
-    </div>
+      {useCamera && !cameraSupported && <p className="text-sm text-destructive">Camera access requires a secure browser page and camera permissions. Telemetry capture is available.</p>}
+      {useCamera && <p className="text-xs text-muted-foreground">Leave camera audio off to use Wake during capture.</p>}
+      <div hidden={!recording || !useCamera} className="overflow-hidden rounded-lg bg-black">
+        <video ref={videoRef} className="aspect-video max-h-[55vh] w-full object-contain" muted playsInline autoPlay />
+      </div>
+      <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3 text-sm">
+        <p role="status">{status}</p>
+        {retryFiles && <Button type="button" size="sm" variant="outline" onClick={async () => {
+          setCapturePhase("saving"); await saveFiles(); setCapturePhase("saved");
+        }}>Retry file save</Button>}
+        {serverState?.state === "saving" && <p>Saving session record to Sarah…</p>}
+        {queuedSessions.length > 0 && serverState?.state !== "saving" && <div className="flex flex-wrap items-center gap-2">
+          <p className="text-amber-500">{queuedSessions.length} pending server {queuedSessions.length === 1 ? "save" : "saves"}. Keep your telemetry files.</p>
+          <Button type="button" size="sm" variant="outline" onClick={saveServer}>Retry server save</Button>
+        </div>}
+        {serverState?.state === "saved" && <p>
+          Session saved to Sarah · {serverState.bloodPressureCount} BP {serverState.bloodPressureCount === 1 ? "reading" : "readings"} attached.{" "}
+          {showSessionLink && <Link className="font-semibold text-primary underline" to={`/${serverState.entity === "BodyExploration" ? "exploration" : "sessions"}/${serverState.id}`}>Open session</Link>}
+        </p>}
+        {!!files.length && <div className="flex flex-wrap gap-2">
+          {files.map(file => <Button key={file.filename} asChild size="sm" variant="outline">
+            <a href={file.url} download={file.filename} onClick={() => { file.downloaded = true; }}>
+              <Download className="mr-2 h-4 w-4" /> {file.blob.type === "application/json" ? "Download telemetry" : "Download video"}
+            </a>
+          </Button>)}
+        </div>}
+      </div>
+    </section>
   );
 }

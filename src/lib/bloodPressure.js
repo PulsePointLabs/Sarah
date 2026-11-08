@@ -64,8 +64,10 @@ export async function syncBloodPressureFromHealthConnect({ days = 30, limit = 10
   return { ...saved, native };
 }
 
-export async function listRecentBloodPressure(limit = 20) {
-  const response = await fetch(apiUrl(`/blood-pressure/recent?limit=${encodeURIComponent(limit)}`), { cache: "no-store" });
+export async function listRecentBloodPressure(limit = 20, { signal } = {}) {
+  const response = await fetch(apiUrl(`/blood-pressure/recent?limit=${encodeURIComponent(limit)}`), {
+    cache: "no-store", signal: signal || AbortSignal.timeout(5000),
+  });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data?.error || `Could not load BP readings: HTTP ${response.status}`);
   return data;

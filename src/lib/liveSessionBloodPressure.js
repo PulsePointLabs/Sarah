@@ -2,7 +2,69 @@ function usableBloodPressure(reading) {
   if (!reading || typeof reading !== "object") return null;
   const systolic = Number(reading.systolic_mm_hg);
   const diastolic = Number(reading.diastolic_mm_hg);
-  return Number.isFinite(systolic) && Number.isFinite(diastolic) ? reading : null;
+  return systolic > 0 && diastolic > 0 ? reading : null;
+}
+
+export function bloodPressureKey(reading) {
+  return reading?.external_id || reading?.id
+    || [reading?.measured_at || reading?.received_at, reading?.systolic_mm_hg, reading?.diastolic_mm_hg, reading?.pulse_bpm].join("|");
+}
+
+const hourMs = 3600000;
+
+export function correctOmronFutureDstReading(reading, timeZone = "America/New_York") {
+  const raw = reading?.raw || {};
+  if ((reading?.timestamp_source || raw.timestamp_source) !== "cuff_clock"
+      || !/omron/i.test(reading.source_app || "")
+      || !/^omron-/i.test(reading.external_id || "")) return reading;
+  const measured = Date.parse(reading.measured_at);
+  const received = Date.parse(reading.received_at || raw.received_at);
+  const corrected = measured - hourMs;
+  // A stored record cannot have been measured in the future. Only consider
+  // packets whose corrected cuff time is within 30 seconds before receipt.
+  if (!(received >= corrected && received - corrected <= 30000)) return reading;
+
+  const formatter = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" });
+  const offset = at => formatter.formatToParts(at).find(part => part.type === "timeZoneName")?.value;
+  const after = offset(received);
+  const before = offset(received - 30 * 24 * hourMs);
+  const minutes = text => {
+    const match = /^GMT([+-])(\d{2}):(\d{2})$/.exec(text || "");
+    return match ? (Number(match[2]) * 60 + Number(match[3])) * (match[1] === "-" ? -1 : 1) : 0;
+  };
+  if (minutes(before) - minutes(after) !== 60) return reading;
+  const note = "Cuff clock was one hour ahead after daylight saving ended. Original cuff timestamp retained.";
+  return {
+    ...reading,
+    measured_at: new Date(corrected).toISOString(),
+    timestamp_source: "cuff_clock_corrected",
+    timestamp_note: note,
+    raw: {
+      ...raw,
+      cuff_measured_at: raw.cuff_measured_at || reading.measured_at,
+      clock_offset_ms: hourMs,
+      clock_correction: "dst_fallback_future_cuff_time",
+      timestamp_source: "cuff_clock_corrected",
+      timestamp_note: note,
+    },
+  };
+}
+
+export function selectTelemetryBloodPressure({ receipt, stored, sessionReading, openedAt = 0 } = {}) {
+  if (!usableBloodPressure(receipt) && !usableBloodPressure(stored) && !usableBloodPressure(sessionReading)) return null;
+  const sameAsStored = receipt && [stored, sessionReading].some((reading) => reading && bloodPressureKey(reading) === bloodPressureKey(receipt));
+  const receivedAt = Date.parse(receipt?.received_at || "");
+  const storedAt = Date.parse(stored?.received_at || stored?.measured_at || "");
+  if (usableBloodPressure(receipt) && !sameAsStored && receivedAt >= openedAt
+      && (!Number.isFinite(storedAt) || receivedAt >= storedAt)) {
+    const source = receipt.timestamp_source || receipt.raw?.timestamp_source;
+    return { reading: receipt, state: Number.isFinite(Date.parse(receipt.measured_at)) && source !== "received_at" ? "pending" : "clock_unknown" };
+  }
+  if (usableBloodPressure(sessionReading)
+      && (!usableBloodPressure(stored) || !(Date.parse(stored.measured_at) > Date.parse(sessionReading.measured_at)))) {
+    return { reading: sessionReading, state: "session" };
+  }
+  return usableBloodPressure(stored) ? { reading: stored, state: "history" } : null;
 }
 
 export function bloodPressureFallsInSession(reading, { startMs, endMs, sessionId, pauses = [] } = {}) {

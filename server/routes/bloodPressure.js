@@ -1,5 +1,5 @@
 import express from 'express';
-import {bloodPressureFallsInSession} from '../../src/lib/liveSessionBloodPressure.js';
+import {bloodPressureFallsInSession, correctOmronFutureDstReading} from '../../src/lib/liveSessionBloodPressure.js';
 import { db, getEntity, listEntities, upsertEntity } from '../db.js';
 
 export const bloodPressureRouter = express.Router();
@@ -34,6 +34,7 @@ function stableReadingId(reading = {}) {
 }
 
 function normalizeReading(input = {}) {
+  input = correctOmronFutureDstReading(input);
   const measuredAt = isoOrNull(input.measured_at || input.timestamp || input.time || input.startDate);
   const systolic = cleanNumber(input.systolic_mm_hg ?? input.systolic);
   const diastolic = cleanNumber(input.diastolic_mm_hg ?? input.diastolic);
@@ -79,8 +80,9 @@ function sortRecent(rows) {
 function sessionWindow(session, beforeHours = 8, afterHours = 4) {
   const baseMs = new Date(session?.date || session?.created_date || 0).getTime();
   if (!Number.isFinite(baseMs) || baseMs <= 0) return null;
-  let startMs = baseMs;
-  if (session?.start_time && /^\d{1,2}:\d{2}/.test(String(session.start_time))) {
+  const captureStart = Date.parse(session?.capture_started_at || '');
+  let startMs = Number.isFinite(captureStart) ? captureStart : baseMs;
+  if (!Number.isFinite(captureStart) && session?.start_time && /^\d{1,2}:\d{2}/.test(String(session.start_time))) {
     const date = new Date(baseMs);
     const [hour, minute] = String(session.start_time).split(':').map(Number);
     date.setHours(hour, minute, 0, 0);
@@ -113,7 +115,7 @@ function publicReading(reading = {}) {
   return rest;
 }
 
-function attachReadingsToSession(session, readings = [], { source = 'manual_session_bp_attach', entity = 'Session' } = {}) {
+export function attachReadingsToSession(session, readings = [], { source = 'manual_session_bp_attach', entity = 'Session' } = {}) {
   const startMs = sessionStartMs(session);
   if (!startMs) {
     const error = new Error('Session is missing a usable start time.');
@@ -187,7 +189,7 @@ function attachReadingsToSession(session, readings = [], { source = 'manual_sess
           pulse_bpm: latest.pulse_bpm ?? null,
           source_app: latest.source_app || 'Health Connect',
           source_device: latest.source_device || '',
-          relationship: source === 'omron_direct_ble_listener' ? 'captured_during_live_session' : 'manually_attached_to_session',
+          relationship: source === 'manual_session_bp_attach' ? 'manually_attached_to_session' : 'captured_during_live_session',
         }
         : session.session_context?.blood_pressure,
       blood_pressure_readings: mergedReadings,
@@ -196,9 +198,21 @@ function attachReadingsToSession(session, readings = [], { source = 'manual_sess
   return { session: nextSession, attachedCount: attachable.length, attachedReadings: attachable.map(publicReading) };
 }
 
+function cameraCapturesForReading(reading, requestedId) {
+  return ['Session', 'BodyExploration'].flatMap(entity => listEntities(entity)
+    .filter(session => session.capture_transport === 'camera'
+      && (!requestedId || session.id === requestedId)
+      && bloodPressureFallsInSession(reading, {
+        startMs: Date.parse(session.capture_started_at),
+        endMs: Date.parse(session.capture_finalized_at),
+        sessionId: session.id,
+      }))
+    .map(session => ({ session, entity })));
+}
+
 bloodPressureRouter.get('/recent', (req, res) => {
   const limit = Math.max(1, Math.min(500, Number(req.query.limit || 50)));
-  const rows = sortRecent(listEntities('BloodPressureReading')).slice(0, limit);
+  const rows = sortRecent(listEntities('BloodPressureReading').map(reading => correctOmronFutureDstReading(reading))).slice(0, limit);
   res.json({ ok: true, readings: rows.map(publicReading), count: rows.length });
 });
 
@@ -214,6 +228,7 @@ bloodPressureRouter.post('/ingest', (req, res) => {
       const capture = liveCaptureSession();
       // Attach direct cuff readings in the same transaction as ingestion. Old
       // APKs already send session; no renderer polling or second PATCH needed.
+      let attachedToActiveCapture = false;
       if (capture && (!input.session || input.session === capture.id) && /omron/i.test(reading.source_app)) {
         const session = getEntity(capture.entity || 'Session', capture.id);
         const start = Date.parse(capture.startedAt || session?.capture_started_at || '');
@@ -221,6 +236,14 @@ bloodPressureRouter.post('/ingest', (req, res) => {
           attachReadingsToSession({ ...session, capture_started_at: session.capture_started_at || capture.startedAt }, [reading], {
             source: 'omron_direct_ble_listener', entity: capture.entity || 'Session',
           });
+          attachedToActiveCapture = true;
+        }
+      }
+      if (!attachedToActiveCapture && /omron/i.test(reading.source_app)) {
+        const matches = cameraCapturesForReading(reading, input.session);
+        if (matches.length === 1) {
+          const [{ session, entity }] = matches;
+          attachReadingsToSession(session, [reading], { source: 'omron_direct_ble_listener', entity });
         }
       }
       return reading;
@@ -231,12 +254,34 @@ bloodPressureRouter.post('/ingest', (req, res) => {
   }
 });
 
+export function saveCameraCaptureBloodPressure(session, readings, entity) {
+  const window = {
+    startMs: Date.parse(session.capture_started_at),
+    endMs: Date.parse(session.capture_finalized_at),
+    sessionId: session.id,
+  };
+  const available = new Map(listEntities('BloodPressureReading')
+    .map(reading => correctOmronFutureDstReading(reading))
+    .filter(reading => bloodPressureFallsInSession(reading, window))
+    .map(reading => [reading.external_id || reading.id, reading]));
+  for (const raw of readings) {
+    const input = correctOmronFutureDstReading(raw);
+    if (!bloodPressureFallsInSession(input, window)) continue;
+    const reading = normalizeReading(input);
+    const key = reading.external_id || reading.id;
+    if (!available.has(key)) {
+      available.set(key, upsertEntity('BloodPressureReading', reading.id, reading));
+    }
+  }
+  return attachReadingsToSession(session, [...available.values()], { source: 'camera_capture', entity }).session;
+}
+
 bloodPressureRouter.get('/near-session/:sessionId', (req, res) => {
   const session = getEntity('Session', req.params.sessionId);
   if (!session) return res.status(404).json({ error: 'Session not found' });
   const window = sessionWindow(session, req.query.beforeHours ?? 8, req.query.afterHours ?? 4);
   if (!window) return res.status(400).json({ error: 'Session is missing a usable date.' });
-  const readings = sortRecent(listEntities('BloodPressureReading').filter((reading) => {
+  const readings = sortRecent(listEntities('BloodPressureReading').map(reading => correctOmronFutureDstReading(reading)).filter((reading) => {
     const t = readingTime(reading);
     return Number.isFinite(t) && t >= window.startMs && t <= window.endMs;
   }));
@@ -264,7 +309,7 @@ bloodPressureRouter.post('/attach-session/:sessionId', (req, res) => {
     if (!requestedIds.length) {
       return res.status(400).json({ error: 'Provide one or more readingIds to attach.' });
     }
-    const readingMap = new Map(listEntities('BloodPressureReading').map((reading) => [reading.id, reading]));
+    const readingMap = new Map(listEntities('BloodPressureReading').map((reading) => [reading.id, correctOmronFutureDstReading(reading)]));
     const readings = requestedIds.map((id) => readingMap.get(id)).filter(Boolean);
     if (!readings.length) {
       return res.status(404).json({ error: 'No matching blood pressure readings were found.' });

@@ -25,6 +25,7 @@ import { summarizeCapturePauseIntervals } from '../services/capturePauseInterval
 import { coalesceDuplicateHrRows, repairBufferedHrvRows } from '../services/hrCaptureMerge.js';
 import { updateLiveCaptureObsState } from '../services/liveCaptureObsState.js';
 import { decideObsSessionLifecycleTransition } from '../services/liveCaptureSessionLifecycle.js';
+import { cameraCaptureRouter } from './cameraCapture.js';
 
 import { createNativeH10Decoder } from '../services/nativeH10Telemetry.js';
 import { LiveMonitoring } from '../services/liveMonitoring.js';
@@ -2838,6 +2839,8 @@ liveCaptureRouter.post('/refresh-files', async (_req, res) => {
   await refreshLatestFiles();
   res.json(state.files);
 });
+
+liveCaptureRouter.use('/camera-session', cameraCaptureRouter);
 
 liveCaptureRouter.post('/ensure-session', (req, res) => {
   if (!state.hr.recording?.active) {

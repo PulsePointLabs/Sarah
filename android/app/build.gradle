@@ -55,8 +55,8 @@ android {
         applicationId sarahChatOnly ? "com.pulsepointlabs.sarahchat" : "com.pulsepointlabs.sarah"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 300
-        versionName "0.1.300"
+        versionCode 301
+        versionName "0.1.301"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "boolean", "SARAH_CHAT_ONLY", sarahChatOnly.toString()
         manifestPlaceholders = [appLabel: sarahChatOnly ? "Sarah Chat" : "Sarah"]

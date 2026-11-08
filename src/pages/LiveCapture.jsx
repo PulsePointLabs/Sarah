@@ -1,4 +1,5 @@
 import "./liveCaptureMedia.css";
+import { Button } from "@/components/ui/button";
 import BloodPressureCuffControls from "@/components/live/BloodPressureCuffControls";
 import { cuffReceiptSince } from "@/lib/omronCuffStatus";
 import CivetLiveCard from "@/components/CivetLiveCard.jsx";
@@ -104,7 +105,10 @@ import {
 } from "@/lib/bloodPressure";
 import {
   bloodPressureFallsInSession,
+  bloodPressureKey,
+  correctOmronFutureDstReading,
   resetBloodPressureCaptureForSession,
+  selectTelemetryBloodPressure,
   selectLiveSessionBloodPressure,
 } from "@/lib/liveSessionBloodPressure";
 import {
@@ -1666,6 +1670,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const displayViewMode = searchParams.get("display");
   const mediaFocusView = displayViewMode === "media";
   const telemetryFocusView = displayViewMode === "focus" || displayViewMode === "telemetry";
+  const detachedTelemetry = telemetryFocusView && searchParams.get("standalone") === "1";
   const focusView = mediaFocusView || telemetryFocusView;
   const { toast } = useToast();
   const liveCaptureWakeLockRef = useRef(null);
@@ -1815,11 +1820,26 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   });
   const [bpOmronListening, setBpOmronListening] = useState(false);
   const [launchProfile, setLaunchProfile] = useState(() => readLiveCaptureLaunchProfile());
-  const [captureTab, setCaptureTab] = useState(() => phoneOnly || isCapacitorAndroidShell()
-    ? "camera" : captureMode === "hr" ? "telemetry" : captureMode === "media" ? "camera" : "session");
+  const [captureTab, setCaptureTab] = useState(() => !phoneOnly && captureMode === "hr" ? "telemetry" : "camera");
+  const [obsWorkflow, setObsWorkflow] = useState(false);
   const [cameraAudioActive, setCameraAudioActive] = useState(false);
-  const [phoneCaptureBusy, setPhoneCaptureBusy] = useState(false);
+  const [cameraCapture, setCameraCapture] = useState({ phase: "idle", startedAt: null });
   const phoneCaptureRef = useRef(null);
+  const stopCameraCaptureRef = useRef(null);
+  const [storedTelemetryBp, setStoredTelemetryBp] = useState(null);
+  const [sharedTelemetryBp, setSharedTelemetryBp] = useState(null);
+  const [sharedCameraCapture, setSharedCameraCapture] = useState(null);
+  const bpBroadcastRef = useRef(null);
+  const bpReceiptRef = useRef(null);
+  const cameraCaptureStatusRef = useRef(cameraCapture);
+  const cameraRecording = cameraCapture.phase === "recording";
+  const displayCameraRecording = cameraRecording || sharedCameraCapture?.phase === "recording";
+  const phoneCaptureBusy = ["starting", "recording", "saving"].includes(cameraCapture.phase);
+  const reportCameraCapture = useCallback((capture) => {
+    cameraCaptureStatusRef.current = capture;
+    setCameraCapture(capture);
+    bpBroadcastRef.current?.postMessage({ type: "camera", capture });
+  }, []);
   const setAdvancedSetupOpen = (open) => setCaptureTab((tab) =>
     (typeof open === "function" ? open(tab === "devices") : open) ? "devices" : "session");
   const [launchState, setLaunchState] = useState({ phase: "idle", message: "", steps: [], busy: false, error: "" });
@@ -1909,6 +1929,48 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const bpForegroundRefreshCooldownRef = useRef(0);
   const [heldBpReadings, setHeldBpReadings] = useState({});
   const bpCaptureOpenedAtRef = useRef(Date.now());
+  const noteCuffReceipt = useCallback((reading) => {
+    reading = correctOmronFutureDstReading(reading);
+    const receipt = cuffReceiptSince(reading, bpCaptureOpenedAtRef.current - 30 * 60 * 1000);
+    if (!receipt) return;
+    const stamp = Date.parse(receipt.received_at || receipt.raw?.received_at || "");
+    if (stamp >= (Date.parse(bpReceiptRef.current?.received_at || "") || 0)) {
+      const next = { ...receipt, received_at: new Date(stamp).toISOString() };
+      bpReceiptRef.current = next;
+      setBpCapture(prev => ({ ...prev, lastCuffReceipt: next }));
+      bpBroadcastRef.current?.postMessage({ type: "receipt", reading: next });
+    }
+    const camera = phoneCaptureRef.current;
+    if (camera && stamp >= Date.parse(camera.startedAt)) camera.bloodPressure.set(bloodPressureKey(receipt), receipt);
+  }, []);
+
+  useEffect(() => {
+    if (typeof BroadcastChannel !== "function") return undefined;
+    const channel = new BroadcastChannel("sarah-live-capture");
+    bpBroadcastRef.current = channel;
+    channel.onmessage = ({ data }) => {
+      if (data?.type === "request") {
+        if (bpReceiptRef.current) channel.postMessage({ type: "receipt", reading: bpReceiptRef.current });
+        if (cameraCaptureStatusRef.current.startedAt) {
+          channel.postMessage({ type: "camera", capture: cameraCaptureStatusRef.current });
+        }
+      } else if (data?.type === "camera" && detachedTelemetry) {
+        setSharedCameraCapture(data.capture || null);
+      } else if (data?.type === "receipt" && data.reading) {
+        setSharedTelemetryBp(previous => !previous || Date.parse(data.reading.received_at) >= Date.parse(previous.received_at)
+          ? data.reading : previous);
+        if (phoneCaptureRef.current && Date.parse(data.reading.received_at) >= Date.parse(phoneCaptureRef.current.startedAt)) {
+          phoneCaptureRef.current.bloodPressure.set(bloodPressureKey(data.reading), data.reading);
+        }
+      }
+    };
+    channel.postMessage({ type: "request" });
+    return () => {
+      if (cameraCaptureStatusRef.current.startedAt) channel.postMessage({ type: "camera", capture: null });
+      bpBroadcastRef.current = null;
+      channel.close();
+    };
+  }, [detachedTelemetry]);
   const bpOmronSeenRef = useRef(new Set());
   const bpSessionKeyRef = useRef(null);
   bpSessionKeyRef.current = liveSession?.active ? liveSession.activeSessionId || null : null;
@@ -2479,7 +2541,9 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   }, [howlControlForm]);
 
   const getCurrentSessionTime = useCallback(() => {
-    const startMs = Date.parse(phoneCaptureRef.current?.startedAt || "") || Number(recording?.startedAtMs) || (liveSession?.startedAt ? new Date(liveSession.startedAt).getTime() : 0);
+    const camera = phoneCaptureRef.current;
+    if (camera) return Math.max(0, Math.floor((performance.now() - camera.startedPerfMs) / 1000));
+    const startMs = Number(recording?.startedAtMs) || (liveSession?.startedAt ? new Date(liveSession.startedAt).getTime() : 0);
     if (!startMs || Number.isNaN(startMs)) return 0;
     return Math.max(0, Math.round((Date.now() - startMs) / 1000));
   }, [liveSession?.startedAt, recording?.startedAtMs]);
@@ -3823,10 +3887,10 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     );
   }, [hrTelemetry]);
 
-  const prediction = useMemo(() => status?.monitoring?.basePrediction || computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory, {
+  const prediction = useMemo(() => (!cameraRecording && status?.monitoring?.basePrediction) || computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory, {
     sessionTimeSec: getCurrentSessionTime(),
-  }), [status?.monitoring?.basePrediction, emgTelemetry, getCurrentSessionTime, hrTelemetry, telemetryHistory]);
-  const monitoringPrediction = useMemo(() => status?.monitoring?.prediction || withCivetEvidence(prediction, civet.latest, Math.max(emgTelemetry?.left_pct || emgTelemetry?.level_pct || 0, emgTelemetry?.right_pct || 0)), [status?.monitoring?.prediction, prediction, civet.latest, emgTelemetry]);
+  }), [cameraRecording, status?.monitoring?.basePrediction, emgTelemetry, getCurrentSessionTime, hrTelemetry, telemetryHistory]);
+  const monitoringPrediction = useMemo(() => (!cameraRecording && status?.monitoring?.prediction) || withCivetEvidence(prediction, civet.latest, Math.max(emgTelemetry?.left_pct || emgTelemetry?.level_pct || 0, emgTelemetry?.right_pct || 0)), [cameraRecording, status?.monitoring?.prediction, prediction, civet.latest, emgTelemetry]);
   const recordingTransportActive = Boolean(recording?.active);
   const recordingPaused = Boolean(recordingTransportActive && recording?.paused);
   const recordingActive = Boolean(recordingTransportActive && !recordingPaused);
@@ -3892,6 +3956,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
 
   useEffect(() => {
     let cancelled = false;
+    const keepScreenAwake = cameraRecording || recordingTransportActive || captureArmed;
 
     const releaseWakeLock = async () => {
       const wakeLock = liveCaptureWakeLockRef.current;
@@ -3904,10 +3969,10 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     };
 
     const requestWakeLock = async () => {
-      if ((!recordingTransportActive && !captureArmed) || document.hidden || liveCaptureWakeLockRef.current || !("wakeLock" in navigator)) return;
+      if (!keepScreenAwake || document.hidden || liveCaptureWakeLockRef.current || !("wakeLock" in navigator)) return;
       try {
         const wakeLock = await navigator.wakeLock.request("screen");
-        if (cancelled || (!recordingTransportActive && !captureArmed)) {
+        if (cancelled) {
           await wakeLock.release();
           return;
         }
@@ -3928,7 +3993,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       }
     };
 
-    if (recordingTransportActive || captureArmed) requestWakeLock();
+    if (keepScreenAwake) requestWakeLock();
     else releaseWakeLock();
     document.addEventListener("visibilitychange", onVisibilityChange);
 
@@ -3937,7 +4002,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       document.removeEventListener("visibilitychange", onVisibilityChange);
       releaseWakeLock();
     };
-  }, [captureArmed, recordingTransportActive]);
+  }, [cameraRecording, captureArmed, recordingTransportActive]);
 
   useEffect(() => {
     // Keep the Android collector awake for the entire time Live Capture is open,
@@ -4044,31 +4109,45 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const latestBpReading = selectLiveSessionBloodPressure({
     activeSessionId: liveSession?.active ? liveSession.activeSessionId : null,
     activeSessionDoc,
-    captureState: bpCapture,
+    captureState: bpCapture.cuffDeliveryPending ? null : bpCapture,
     window: {
       startMs: Date.parse(liveSession?.startedAt || activeSessionDoc?.capture_started_at || ""),
       endMs: Date.parse(activeSessionDoc?.capture_finalized_at || liveSession?.finalizedAt || "") || Date.now(),
       pauses: activeSessionDoc?.capture_pause_intervals || liveSession?.pauseIntervals || [],
     },
   });
-  const latestBpValue = latestBpReading?.systolic_mm_hg && latestBpReading?.diastolic_mm_hg
-    ? `${latestBpReading.systolic_mm_hg}/${latestBpReading.diastolic_mm_hg}`
+  const localReceipt = bpCapture.lastCuffReceipt;
+  const receiptForTelemetry = Date.parse(sharedTelemetryBp?.received_at || "") > (Date.parse(localReceipt?.received_at || "") || 0)
+    ? sharedTelemetryBp : localReceipt;
+  const telemetryBp = selectTelemetryBloodPressure({
+    receipt: receiptForTelemetry,
+    stored: storedTelemetryBp,
+    sessionReading: latestBpReading,
+    openedAt: bpCaptureOpenedAtRef.current - 30 * 60 * 1000,
+  });
+  const displayedBp = telemetryBp?.reading;
+  const latestBpValue = displayedBp
+    ? `${displayedBp.systolic_mm_hg}/${displayedBp.diastolic_mm_hg}`
     : "--";
-  const latestBpHelper = latestBpReading
-    ? `${latestBpReading.pulse_bpm ? `${Math.round(Number(latestBpReading.pulse_bpm))} bpm pulse · ` : ""}${formatBloodPressureTime(latestBpReading.measured_at, latestBpReading.timestamp_source)}`
-    : "waiting for OMRON";
+  const latestBpHelper = displayedBp ? [
+    displayedBp.pulse_bpm ? `${Math.round(Number(displayedBp.pulse_bpm))} bpm pulse` : "",
+    telemetryBp.state === "pending" ? "Received · server save pending"
+      : telemetryBp.state === "clock_unknown" ? "Received · cuff date unavailable"
+      : telemetryBp.state === "session" ? "Saved in this session" : "Saved to BP history",
+    displayedBp.measured_at && telemetryBp.state !== "clock_unknown" ? formatBloodPressureTime(displayedBp.measured_at, displayedBp.timestamp_source) : "",
+  ].filter(Boolean).join(" · ") : "Waiting for a cuff reading";
   const leftEmgLevel = readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct);
   const rightEmgLevel = readNumber(emgTelemetry?.right_pct);
   const displayedHr = heldCurrentHr;
   const serverMonitoringFresh = status?.monitoring?.version === 1 && !status.monitoring.stale
     && !status.monitoring.error && liveHealthNowMs - Number(status.monitoring.latestAt || 0) < 5000;
-  const monitoringHelper = status?.monitoring?.version === 1
+  const monitoringHelper = displayCameraRecording ? "Monitoring the local capture" : status?.monitoring?.version === 1
     ? status.monitoring.error ? `Server monitoring error: ${status.monitoring.error}`
       : !status.monitoring.active ? "Server monitor ready · start a session"
         : status.monitoring.paused ? "Session paused"
           : serverMonitoringFresh ? "Live server monitoring · independent of phone screen" : "Server monitoring waiting for fresh data"
     : "Local screen monitoring · update the Sarah server";
-  const displayedNearClimax = status?.monitoring?.version === 1
+  const displayedNearClimax = !cameraRecording && status?.monitoring?.version === 1
     ? serverMonitoringFresh ? status.monitoring.prediction?.nearClimax : null
     : heldTelemetryValue(telemetryHistory, "nearClimax", recentHrPacket ? monitoringPrediction.nearClimax : null);
   const displayedRrCount = heldTelemetryValue(telemetryHistory, "rrCount", rrCount);
@@ -5108,9 +5187,19 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         readings = Array.isArray(recent?.readings) ? recent.readings : [];
       }
 
-      if (!readings.length && nativeSyncAttempted) {
+      if (nativeSyncAttempted) {
         const recent = await listRecentBloodPressure(25);
-        readings = Array.isArray(recent?.readings) ? recent.readings : [];
+        readings = Array.isArray(recent?.readings) && recent.readings.length ? recent.readings : readings;
+      }
+      const latestStoredReading = readings[0] || null;
+      if (latestStoredReading) setStoredTelemetryBp(latestStoredReading);
+      const camera = phoneCaptureRef.current;
+      if (camera) {
+        for (const reading of readings) {
+          if (bloodPressureFallsInSession(reading, {
+            startMs: Date.parse(camera.startedAt), endMs: Date.now(), sessionId: camera.id,
+          })) camera.bloodPressure.set(bloodPressureKey(reading), reading);
+        }
       }
 
       const stamped = await stampBloodPressureReadings(readings, {
@@ -5118,7 +5207,6 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           ? manual ? "health_connect_manual_sync" : "health_connect_auto_sync"
           : manual ? "blood_pressure_database_manual_refresh" : "blood_pressure_database_auto_refresh",
       });
-      const latestStoredReading = readings[0] || null;
       const activeSessionId = liveSession?.active ? liveSession.activeSessionId || null : null;
       const needsPermission = nativeStatus?.native !== false && !nativePermissionGranted;
       setBpCapture((prev) => {
@@ -5168,23 +5256,33 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
 
   const saveOmronBloodPressureForLiveSession = useCallback(async (reading) => {
     if (!reading) throw new Error("OMRON did not return a blood pressure reading.");
+    reading = correctOmronFutureDstReading(reading);
+    noteCuffReceipt(reading);
     const readingKey = reading.external_id || reading.id || `${reading.measured_at}-${reading.systolic_mm_hg}-${reading.diastolic_mm_hg}-${reading.pulse_bpm || ""}`;
     if (bpOmronSeenRef.current.has(readingKey)) return;
     const activeSessionId = liveSession?.active ? liveSession.activeSessionId || null : null;
-    const belongs = Boolean(activeSessionId && readingIsInActiveSession(reading));
+    const camera = phoneCaptureRef.current;
+    const cameraBelongs = camera && bloodPressureFallsInSession(reading, {
+      startMs: Date.parse(camera.startedAt), endMs: Date.now(), sessionId: camera.id,
+    });
+    const belongs = Boolean(!camera && activeSessionId && readingIsInActiveSession(reading));
     const receipt = cuffReceiptSince(reading, bpCaptureOpenedAtRef.current);
     if (receipt) setBpCapture(prev => ({...prev, lastCuffReceipt:receipt, cuffDeliveryPending:true,
       ...(belongs && bpSessionKeyRef.current === activeSessionId ? {sessionId:activeSessionId,lastReading:reading} : {})}));
-    const saved = await ingestBloodPressureReadings([belongs ? {...reading, session: activeSessionId} : reading]);
+    const sessionId = cameraBelongs ? camera.id : belongs ? activeSessionId : null;
+    const saved = await ingestBloodPressureReadings([sessionId ? {...reading, session: sessionId} : reading]);
     if (!Array.isArray(saved?.readings) || !saved.readings.length) throw new Error("The BP server did not confirm saving this reading. It will be retried.");
+    const latestReading = saved.readings[0];
+    setStoredTelemetryBp(previous => Date.parse(previous?.measured_at || "") > Date.parse(latestReading.measured_at) ? previous : latestReading);
+    if (cameraBelongs) camera.bloodPressure.set(bloodPressureKey(latestReading), latestReading);
     if (bpSessionKeyRef.current !== activeSessionId) return;
     if (!belongs) {
       bpOmronSeenRef.current.add(readingKey);
       setBpCapture(prev => ({...prev, syncing:false, error:"", cuffDeliveryPending:false,
-        message:"Cuff reading saved to BP history; its measurement time does not belong to this session."}));
+        message: cameraBelongs ? "Cuff reading saved to BP history and captured with this recording."
+          : "Cuff reading saved to BP history."}));
       return;
     }
-    const latestReading = saved.readings[0];
     const stamped = await stampBloodPressureReadings(saved.readings, {source:"omron_direct_ble_listener"});
     if (bpSessionKeyRef.current !== activeSessionId) return;
     bpOmronSeenRef.current.add(readingKey);
@@ -5192,7 +5290,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       lastReading:stamped.latest || latestReading, lastCapturedAt:new Date().toISOString(),
       capturedCount:prev.capturedCount + (stamped.stamped || 0),
       message:`OMRON captured ${formatBloodPressure(latestReading)} during this session.`}));
-  }, [liveSession?.active, liveSession?.activeSessionId, readingIsInActiveSession, stampBloodPressureReadings]);
+  }, [liveSession?.active, liveSession?.activeSessionId, noteCuffReceipt, readingIsInActiveSession, stampBloodPressureReadings]);
 
   const saveOmronReadingRef = useRef(saveOmronBloodPressureForLiveSession);
   saveOmronReadingRef.current = saveOmronBloodPressureForLiveSession;
@@ -5225,8 +5323,12 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     try {
       await startOmronBloodPressureListener({
         forceDevicePicker,
-        onHeldReading: (reading) => setHeldBpReadings((prev) => ({ ...prev, [reading.external_id || reading.id || JSON.stringify(reading)]: reading })),
+        onHeldReading: (reading) => {
+          noteCuffReceipt(reading);
+          setHeldBpReadings((prev) => ({ ...prev, [bloodPressureKey(reading)]: reading }));
+        },
         onStatus: (message, connection = {}) => {
+          for (const reading of connection.pendingReadings || [connection.pendingReading].filter(Boolean)) noteCuffReceipt(reading);
           setBpCapture((prev) => ({
             ...prev,
             syncing: false,
@@ -5290,7 +5392,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     } finally {
       bpOmronActionInFlightRef.current = false;
     }
-  }, [saveOmronBloodPressureForLiveSession]);
+  }, [noteCuffReceipt, saveOmronBloodPressureForLiveSession]);
 
   const copyCuffDiagnostics = useCallback(async () => {
     try {
@@ -5346,8 +5448,9 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   }, [bpOmronListening, startOmronBloodPressureListenerForLiveSession]);
 
   useEffect(() => () => {
+    if (detachedTelemetry) return;
     stopOmronBloodPressureListener().catch(() => {});
-  }, []);
+  }, [detachedTelemetry]);
 
   const requestBloodPressureForLiveCapture = useCallback(async () => {
     setBpCapture((prev) => ({
@@ -5418,7 +5521,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   }, [liveSession?.activeSessionId]);
 
   useEffect(() => {
-    if (!isSarahNativeShell()) return undefined;
+    if (detachedTelemetry || !isSarahNativeShell()) return undefined;
 
     let mounted = true;
     let appStateHandle = null;
@@ -5460,6 +5563,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     };
   }, [
     bpOmronListening,
+    detachedTelemetry,
     liveSession?.activeSessionId,
     startOmronBloodPressureListenerForLiveSession,
     syncBloodPressureForLiveSession,
@@ -7289,7 +7393,8 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       : liveCueSettings.enabled && !liveCueAudio.ready
         ? "Prepare Sarah and Start Session"
         : "Start Session";
-  const showLiveControlBar = !focusView && (launchActive || endingSession);
+  const externalRecorderControls = obsWorkflow && captureTab !== "camera" && !phoneCaptureBusy;
+  const showLiveControlBar = externalRecorderControls && !focusView && (launchActive || endingSession);
   const showAdvancedSetupConsole = !phoneOnly && captureTab === "devices";
   const obsPreferred = Boolean(launchProfile.obsEnabled && !launchProfile.telemetryOnlyFallback);
   const h10RawStreamsActive = Boolean(
@@ -7446,13 +7551,14 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           icon={Radio}
         />
         <div className="flex flex-wrap items-center gap-2 md:mt-1">
-          {phoneOnly ? <button type="button" onClick={onExitPhoneCapture} disabled={phoneCaptureBusy}
+          {phoneOnly && <button type="button" onClick={onExitPhoneCapture} disabled={phoneCaptureBusy}
             className="rounded-lg border border-border px-3 py-2 text-sm font-semibold disabled:opacity-50">
             Exit Phone Capture
-          </button> :
+          </button>}
+          {(!phoneOnly || captureTab === "telemetry") &&
           <button
             type="button"
-            onClick={() => setFocusView(true)}
+            onClick={() => setFocusView(true, captureTab === "telemetry" ? "telemetry" : "media")}
             className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm font-semibold text-foreground shadow-sm hover:bg-primary/15"
           >
             <Maximize2 className="h-4 w-4 text-primary" />
@@ -7555,9 +7661,9 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         </div>
       )}
 
-      {!focusView && showAdvancedSetupConsole && <ObsRecordingSync />}
+      {!focusView && showAdvancedSetupConsole && obsWorkflow && !phoneCaptureBusy && <ObsRecordingSync />}
 
-      {(recordingTransportActive || liveSession?.activeSessionId) && !focusView && !liveSession?.importing && (
+      {externalRecorderControls && (recordingTransportActive || liveSession?.activeSessionId) && !focusView && !liveSession?.importing && (
         <button
           type="button"
           onClick={endActiveSession}
@@ -7647,7 +7753,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
                   </button>
                 </>
               )}
-              {launchActive && !liveSession?.importing && (
+              {externalRecorderControls && launchActive && !liveSession?.importing && (
                 <button
                   type="button"
                   onClick={endActiveSession}
@@ -7671,7 +7777,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         </section>
       )}
 
-      {!focusView && captureTab === "session" && launchActive && (<section className={`rounded-2xl border p-4 shadow-sm ${liveHealthToneClasses(liveGuidanceMode.tone)}`} aria-live="polite">
+      {!focusView && obsWorkflow && !phoneCaptureBusy && captureTab === "session" && launchActive && (<section className={`rounded-2xl border p-4 shadow-sm ${liveHealthToneClasses(liveGuidanceMode.tone)}`} aria-live="polite">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
@@ -7728,7 +7834,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         </div>}
       </section>)}
 
-      {!focusView && captureTab === "session" && completedLiveSession && (
+      {!focusView && obsWorkflow && !phoneCaptureBusy && captureTab === "session" && completedLiveSession && (
         <section className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 shadow-sm">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
@@ -7769,24 +7875,51 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         </div>
       )}
 
-      <div hidden={focusView || captureTab !== "camera"}>
+      {!focusView && (phoneCaptureBusy || cameraCapture.phase === "saved") && captureTab !== "camera" && (
+        <div role="status" className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3">
+          <span className={cameraRecording ? "font-bold text-red-500" : "font-semibold"}>
+            {cameraRecording ? `Recording locally · ${fmtMmSs(getCurrentSessionTime())}`
+              : cameraCapture.phase === "starting" ? "Starting local capture…"
+              : cameraCapture.phase === "saving" ? "Recording stopped · saving files…" : "Capture finished"}
+          </span>
+          {cameraRecording && <Button type="button" variant="destructive" size="sm" onClick={() => stopCameraCaptureRef.current?.()}>Stop &amp; Save</Button>}
+          <Button type="button" variant="outline" size="sm" onClick={() => setCaptureTab("camera")}>Open Camera</Button>
+        </div>
+      )}
+
+      {!focusView && captureTab === "camera" && !phoneOnly && (
+        <label className="inline-flex items-center gap-2 text-sm font-medium">
+          Record as
+          <select className="rounded-md border border-border bg-card px-3 py-2" value={captureKind} disabled={phoneCaptureBusy}
+            onChange={event => setCaptureKind(event.target.value)}>
+            {CAPTURE_KINDS.map(kind => <option key={kind.value} value={kind.value}>{kind.label}</option>)}
+          </select>
+        </label>
+      )}
+      {!detachedTelemetry && <div hidden={focusView || captureTab !== "camera"}>
         <LiveSessionMobileRecorder
-          activeSessionDoc={activeSessionDoc}
-          liveSession={liveSession}
-          ensureSession={ensureSession}
           phoneCaptureRef={phoneCaptureRef}
+          stopCaptureRef={stopCameraCaptureRef}
           onCameraAudioChange={setCameraAudioActive}
-          onCaptureBusyChange={setPhoneCaptureBusy}
+          onCaptureStatus={reportCameraCapture}
+          captureKind={captureKind}
+          showSessionLink={!phoneOnly}
           wakeEnabled={voiceWakeEnabled || manualVoiceBusy}
-          telemetryHistory={telemetryHistory}
           hrTelemetry={hrTelemetry}
           emgTelemetry={emgTelemetry}
-          latestBpReading={latestBpReading}
           latestSpo2Reading={activeSessionDoc?.latest_pulse_ox_reading || activeSessionDoc?.session_context?.pulse_ox || null}
         />
-      </div>
+      </div>}
 
-      {!focusView && captureTab === "session" && !launchActive && (
+      {!focusView && captureTab === "session" && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" onClick={() => setCaptureTab("camera")}>Open Camera &amp; Telemetry Capture</Button>
+          <Button type="button" variant="outline" aria-expanded={obsWorkflow} disabled={phoneCaptureBusy}
+            onClick={() => setObsWorkflow(value => !value)}>{obsWorkflow ? "Hide external recorder" : "External recorder setup"}</Button>
+        </div>
+      )}
+
+      {!focusView && obsWorkflow && !phoneCaptureBusy && captureTab === "session" && !launchActive && (
         <LiveCaptureLaunchpad
           setupSummary={launchSetupSummary}
           readiness={launchReadiness}
@@ -7924,7 +8057,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
 
 
 
-      {!focusView && launchState.error && (
+      {!focusView && obsWorkflow && !phoneCaptureBusy && captureTab === "session" && launchState.error && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
           <p className="font-semibold">Launch stopped at: {launchState.message}</p>
           <p className="mt-1">{launchState.error}</p>
@@ -8096,7 +8229,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             {[
               { label: "1. Sources", value: hrConnected ? "HR ready" : "Check HR source", active: hrConnected },
-              { label: "2. Session", value: recordingActive ? "Recording live" : "Waiting for OBS", active: recordingActive },
+              { label: "2. Session", value: cameraRecording || externalRecorderControls && recordingActive ? "Recording live" : "Ready to start", active: cameraRecording || externalRecorderControls && recordingActive },
               { label: "3. Annotate", value: annotationRecording ? "Recording note" : voiceWakeEnabled ? "Wake listening on" : "Record when needed", active: annotationRecording || voiceWakeEnabled },
               { label: "4. Watch", value: hrTelemetry?.currentHr != null ? `${fmtNumber(hrTelemetry.currentHr, 0)} bpm live` : "Waiting for telemetry", active: hrTelemetry?.currentHr != null },
             ].map((item) => (
@@ -8109,7 +8242,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         </div>
       )}
 
-      {!focusView && showAdvancedSetupConsole && (
+      {!focusView && showAdvancedSetupConsole && externalRecorderControls && (
         <div className="rounded-2xl border border-primary/25 bg-card p-4 shadow-sm">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
@@ -8379,7 +8512,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         </CollapsibleControlSection>
       )}
 
-      {!focusView && showAdvancedSetupConsole && <CollapsibleControlSection
+      {!focusView && showAdvancedSetupConsole && externalRecorderControls && <CollapsibleControlSection
         icon={CheckCircle2}
         title="Capture Readiness"
         helper="OBS is the session boundary; HR can run alone and EMG stays optional."
@@ -9250,24 +9383,24 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       {!focusView && showAdvancedSetupConsole && <CollapsibleControlSection
         icon={Radio}
         title="Connection Details"
-        helper="Relay, provider, EMG, and OBS status for troubleshooting."
+        helper="Relay, provider, and sensor status for troubleshooting."
         status={connected && hrConnected ? "Core feeds connected" : "Review connections"}
       >
         <div className={`grid gap-3 ${emgLive ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
           <MetricCard icon={<Radio className="w-4 h-4" />} label="Sarah Stream" value={connected ? "Live" : "Offline"} helper="App telemetry bridge" active={connected} />
           <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="HR Source" value={hrConnected ? "Connected" : "Waiting"} helper={status?.hr?.sourceStatus?.label || status?.hr?.url || "ws://127.0.0.1:8765"} active={hrConnected} />
           {emgLive && <MetricCard icon={<Activity className="w-4 h-4" />} label="EMG Feed" value="Live" helper={status?.emg?.textDir || "EMG text files"} active />}
-          <MetricCard
+          {externalRecorderControls && <MetricCard
             icon={<Video className="w-4 h-4" />}
             label="OBS Recording"
             value={recordingPaused ? "Paused" : recordingActive ? "Recording" : "Stopped"}
             helper={recordingPaused ? "Same session remains open; resume in OBS when ready." : recording?.filename || "No active capture"}
             active={recordingActive}
-          />
+          />}
         </div>
       </CollapsibleControlSection>}
 
-      {!focusView && showAdvancedSetupConsole && <div className="rounded-xl border border-border bg-card p-4">
+      {!focusView && showAdvancedSetupConsole && externalRecorderControls && <div className="rounded-xl border border-border bg-card p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
@@ -9447,7 +9580,18 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
 
             {telemetryFocusView && <span className="ml-2 whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{new Date(liveHealthNowMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}
           </h3>
-          {telemetryFocusView && <div className="flex items-center gap-3"><span aria-label="Session timer" className="whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{launchActive && resolveLiveSessionStartMs() ? fmtMmSs(Math.max(0, (liveHealthNowMs - resolveLiveSessionStartMs()) / 1000)) : "00:00"}</span><button type="button" onClick={toggleTelemetryFullscreen} className="rounded-lg border border-border px-3 py-2 text-sm">{telemetryFullscreen?'Exit full screen':'Full screen (F)'}</button><button type="button" onClick={openTelemetryScreen} className="rounded-lg border border-border px-3 py-2 text-sm">Second screen</button><button type="button" aria-label="Telemetry controls" aria-expanded={telemetryControlsOpen} onClick={() => setTelemetryControlsOpen(true)} className="rounded-lg border border-border px-2 py-1 text-sm">Controls</button></div>}
+          <div role="status" aria-label="Latest blood pressure" className="flex flex-wrap items-center gap-x-2 rounded-lg border border-border bg-background px-2 py-1 text-sm">
+            <span className="font-semibold">BP</span>
+            <span className="font-bold tabular-nums">{latestBpValue}{displayedBp ? " mmHg" : ""}</span>
+            <span className={telemetryBp?.state === "pending" || telemetryBp?.state === "clock_unknown" ? "text-amber-500" : "text-muted-foreground"}>{latestBpHelper}</span>
+          </div>
+          {telemetryFocusView && cameraRecording && <Button type="button" variant="destructive" size="sm" onClick={() => stopCameraCaptureRef.current?.()}>Recording locally · Stop &amp; Save</Button>}
+          {telemetryFocusView && !cameraRecording && sharedCameraCapture?.phase === "recording" && (
+            <span className="rounded-lg border border-red-500/50 px-2 py-1 text-sm font-semibold text-red-500">Recording in the main window</span>
+          )}
+          {telemetryFocusView && <div className="flex flex-wrap items-center gap-3"><span aria-label="Session timer" className="whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{cameraRecording ? fmtMmSs(getCurrentSessionTime())
+            : sharedCameraCapture?.phase === "recording" ? fmtMmSs(Math.max(0, (liveHealthNowMs - Date.parse(sharedCameraCapture.startedAt)) / 1000))
+            : launchActive && resolveLiveSessionStartMs() ? fmtMmSs(Math.max(0, (liveHealthNowMs - resolveLiveSessionStartMs()) / 1000)) : "00:00"}</span><button type="button" onClick={toggleTelemetryFullscreen} className="rounded-lg border border-border px-3 py-2 text-sm">{telemetryFullscreen?'Exit full screen':'Full screen (F)'}</button><button type="button" onClick={openTelemetryScreen} className="rounded-lg border border-border px-3 py-2 text-sm">Second screen</button><button type="button" aria-label="Telemetry controls" aria-expanded={telemetryControlsOpen} onClick={() => setTelemetryControlsOpen(true)} className="rounded-lg border border-border px-2 py-1 text-sm">Controls</button></div>}
           <div hidden={telemetryFocusView && !telemetryControlsOpen} className={telemetryFocusView ? "telemetry-top-controls" : ""}>
             <BloodPressureCuffControls label="Telemetry cuff controls" listening={bpOmronListening} busy={bpOmronActionInFlightRef.current}
         message={bpCapture.error || bpCapture.cuffConnectionMessage || (bpOmronListening ? "Waiting for cuff." : "Cuff disconnected.")}
@@ -9498,7 +9642,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
                     <AlertTriangle className="h-4 w-4" /> Stop Howl
                   </button>
                 )}
-                {launchActive && !liveSession?.importing && (
+                {externalRecorderControls && launchActive && !liveSession?.importing && (
                   <button
                     type="button"
                     onClick={endActiveSession}
@@ -9748,7 +9892,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
 
         {telemetryPanelEnabled("vitals") && renderTelemetryDashboardPanel("vitals", <div className={focusView ? "telemetry-vitals-grid h-full min-h-0 gap-2 overflow-hidden" : `grid h-full min-h-0 auto-rows-fr grid-cols-2 gap-2 overflow-hidden sm:grid-cols-3 ${telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`} style={{ order: telemetryPanelOrder("vitals") }}>
           <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(displayedHr, 0)} helper="beats per minute" active={displayedHr != null} level={currentHrLevel} trendValues={telemetryTrendValues(telemetryHistory, "hr", displayedHr)} large display={focusView} beatPulse={visibleHeartbeatPulseId} />
-          <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(latestBpReading)} valueClassName={focusView ? "!text-[clamp(1.75rem,2.8vw,4rem)]" : "!text-[clamp(2rem,8vw,3rem)]"} large display={focusView} />
+          <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(displayedBp)} valueClassName={focusView ? "!text-[clamp(1.75rem,2.8vw,4rem)]" : "!text-[clamp(2rem,8vw,3rem)]"} large display={focusView} />
           {!captureIsBodyExploration && (
             <>
               <MetricCard

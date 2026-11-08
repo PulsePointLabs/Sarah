@@ -7,6 +7,8 @@ const page = fs.readFileSync(new URL('../pages/LiveCapture.jsx', import.meta.url
 function saveHarness() {
   let fail = true; let attempts = 0; let state = {}; const sent = [];
   const context = vm.createContext({ cuffReceiptSince, bpCaptureOpenedAtRef: {current:0}, useCallback: f => f, bpOmronSeenRef: { current: new Set() },
+    correctOmronFutureDstReading: value => value,
+    noteCuffReceipt: () => {}, phoneCaptureRef: {current:null}, setStoredTelemetryBp: () => {},
     setBpCapture: f => { state = f(state); }, formatBloodPressure: () => '120/80',
     liveSession: { active:true, activeSessionId: 'current-session' }, bpSessionKeyRef: {current:'current-session'}, readingIsInActiveSession:()=>true,
     stampBloodPressureReadings: async () => ({ stamped: 0 }),
@@ -76,6 +78,7 @@ test('automatic database refresh does not clear cuff save error or change contro
   let state = { status: 'error', error: 'offline', lastReading: reading, message: 'Retry pending', permissionGranted: true };
   const original = state;
   const context = vm.createContext({ useCallback: f => f, bpSyncInFlightRef: {current:false}, bpOmronListening:true,
+    phoneCaptureRef: {current:null}, setStoredTelemetryBp: () => {},
     liveSession:{active:true,activeSessionId:'session'}, bpSessionKeyRef:{current:'session'}, setBpCapture:f=>{state=f(state);},
     getBloodPressureStatus:async()=>({native:true,permissionGranted:false}), listRecentBloodPressure:async()=>({readings:[]}),
     stampBloodPressureReadings:async()=>({stamped:0,latest:null}) });

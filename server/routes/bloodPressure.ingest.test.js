@@ -4,11 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
+import { randomUUID } from 'node:crypto';
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'sarah-bp-ingest-'));
 process.env.DATABASE_PATH=path.join(temp,'test.sqlite');
 const {db,initDb,upsertEntity,getEntity,listEntities}=await import('../db.js');initDb();
 const {bloodPressureRouter,setBloodPressureCaptureResolver}=await import('./bloodPressure.js');
-const app=express();app.use(express.json());app.use(bloodPressureRouter);
+const {cameraCaptureRouter}=await import('./cameraCapture.js');
+const app=express();app.use(express.json());app.use(bloodPressureRouter);app.use('/camera-session', cameraCaptureRouter);
 const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
 const ingest=async reading=>{const r=await fetch(`http://127.0.0.1:${server.address().port}/ingest`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({readings:[reading]})});return {status:r.status,data:await r.json()};};
 test('direct APK BP is attached atomically for Body Exploration and Session; retries do not duplicate',async()=>{
@@ -61,6 +63,64 @@ test('a verified DST-corrected reading joins its recording while retaining the o
  assert.equal(result.data.readings[0].timestamp_source,'cuff_clock_corrected');
  await ingest({...result.data.readings[0],raw:{timestamp_source:'cuff_clock_corrected',cuff_measured_at:original}});
  assert.equal(getEntity('Session','dst').event_timeline.length,1);
+});
+
+test('late cuff delivery attaches once to the matching independent camera capture', async () => {
+  setBloodPressureCaptureResolver(() => null);
+  const start = Date.now() - 3600000;
+  const end = start + 60000;
+  const id = 'independent-camera';
+  upsertEntity('Session', id, {
+    capture_transport: 'camera',
+    capture_started_at: new Date(start).toISOString(),
+    capture_finalized_at: new Date(end).toISOString(),
+  });
+  const reading = {
+    external_id: 'late-camera-cuff', source_app: 'OMRON native BLE',
+    measured_at: new Date(start + 15000).toISOString(), received_at: new Date().toISOString(),
+    timestamp_source: 'cuff_clock', systolic_mm_hg: 124, diastolic_mm_hg: 86,
+  };
+  assert.equal((await ingest(reading)).status, 200);
+  assert.equal((await ingest(reading)).status, 200);
+  await ingest({ ...reading, external_id: 'late-camera-uncertain', timestamp_source: 'received_at' });
+  const session = getEntity('Session', id);
+  assert.equal(session.blood_pressure_readings.length, 1);
+  assert.equal(session.event_timeline[0].time_s, 15);
+  assert.equal(session.latest_blood_pressure_reading.systolic_mm_hg, 124);
+});
+
+test('camera session saves without an external recorder, merging BP history and offline cuff receipts', async () => {
+  setBloodPressureCaptureResolver(() => null);
+  const start = Date.now() - 7200000;
+  const at = offset => new Date(start + offset).toISOString();
+  const reading = (external_id, offset, timestamp_source = 'cuff_clock') => ({
+    external_id, measured_at: at(offset), timestamp_source,
+    source_app: 'OMRON', systolic_mm_hg: 124, diastolic_mm_hg: 86,
+  });
+  await ingest(reading('camera-already-saved', 10000));
+  await ingest(reading('camera-before-start', -1));
+  const body = {
+    session_id: randomUUID(), capture_kind: 'body_exploration',
+    video_start_timestamp: at(0), video_stop_timestamp: at(45000), video_filename: 'test.webm',
+    annotations: [{ id: 'voice', time_s: 2, note: 'test' }],
+    blood_pressure_snapshots: [reading('camera-offline', 5000), reading('camera-unknown', 8000, 'received_at')],
+  };
+  const save = async () => {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/camera-session`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const confirmation = await save();
+  assert.equal(confirmation.entity, 'BodyExploration');
+  assert.equal(confirmation.bloodPressureCount, 2);
+  const id = body.session_id;
+  assert.deepEqual(getEntity('BodyExploration', id).event_timeline.map(event => event.time_s), [2, 5, 10]);
+  assert.equal(getEntity('BloodPressureReading', 'bp-camera-unknown'), null);
+  upsertEntity('BodyExploration', id, { notes: 'Edited after recording' });
+  assert.equal((await save()).bloodPressureCount, 2);
+  assert.equal(getEntity('BodyExploration', id).notes, 'Edited after recording');
 });
 
 test.after(async()=>{await new Promise(resolve=>server.close(resolve));db.close();fs.rmSync(temp,{recursive:true,force:true});});

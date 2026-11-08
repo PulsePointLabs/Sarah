@@ -86,10 +86,10 @@ export function getSarahApiBaseCandidates() {
 
   if (!isSarahNativeShell()) {
     return uniqueBases([
-      ...configured,
       queryBase,
-      storedBase,
+      ...configured,
       "/api",
+      storedBase,
     ]);
   }
 
@@ -134,8 +134,8 @@ async function checkApiBase(base, timeoutMs) {
       return { ok: false, base, error: `HTTP ${response.status}` };
     }
     const data = await response.json().catch(() => ({}));
-    if (data?.ok === false) {
-      return { ok: false, base, error: "Health check returned not ok" };
+    if (data?.ok !== true || data.app !== "Sarah Local API") {
+      return { ok: false, base, error: "Endpoint did not identify itself as Sarah" };
     }
     return { ok: true, base, data };
   } catch (error) {
