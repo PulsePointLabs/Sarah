@@ -13,6 +13,17 @@ class OmronBloodPressurePlugin : Plugin() {
         OmronCollector.init(context.applicationContext)
         OmronCollector.emit = events
     }
+    override fun handleOnResume() {
+        super.handleOnResume()
+        // A process restart or in-place update can leave the saved listener armed
+        // in preferences but no acquisition service running. Resume the user's
+        // existing choice when the app is visible, without waiting for a page.
+        OmronCollector.restore(context.applicationContext)
+        if (OmronCollector.armed) {
+            runCatching { SarahCaptureService.start(context.applicationContext) }
+                .onFailure { notifyListeners("error", JSObject().put("message", "Could not keep cuff capture active in the background. Reopen Live Capture to retry.")) }
+        }
+    }
     @PluginMethod fun arm(call: PluginCall) {
         activity.runOnUiThread {
             try { call.resolve(OmronCollector.arm(call.getString("deviceId"), call.getString("name"), call.getString("endpoint").orEmpty())) }

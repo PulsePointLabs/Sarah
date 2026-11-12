@@ -243,6 +243,7 @@ object OmronCollector {
         }
 
         override fun onScanFailed(errorCode: Int) {
+            diagnostic("scan_failed", errorCode)
             scanning = false
             if (!armed) return
             notifyListeners("status", stateObject("waiting_for_cuff").put("message", "OMRON scan paused; retrying shortly."))
