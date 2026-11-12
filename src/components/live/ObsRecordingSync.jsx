@@ -4,6 +4,7 @@ import { apiUrl } from '@/lib/mobileApiBase';
 export default function ObsRecordingSync() {
   const [snapshot, setSnapshot] = useState(null);
   const [form, setForm] = useState({ enabled: false, url: '', password: '', clearPassword: false });
+  const [primaryForm, setPrimaryForm] = useState({ url: '', password: '', clearPassword: false });
   const [error, setError] = useState('');
   const [connectionError, setConnectionError] = useState('');
   const [notice, setNotice] = useState('');
@@ -24,6 +25,7 @@ export default function ObsRecordingSync() {
         setConnectionError('');
         if (!initialized.current) {
           setForm((previous) => ({ ...previous, ...value.settings }));
+          setPrimaryForm(previous => ({ ...previous, ...value.primaryConnection }));
           initialized.current = true;
         }
       } catch (failure) { if (mounted) setConnectionError(failure.message); }
@@ -38,12 +40,17 @@ export default function ObsRecordingSync() {
     try {
       const response = await fetch(apiUrl(`/obs-recording${suffix}`), {
         method, headers: { 'Content-Type': 'application/json' },
-        ...(method === 'PUT' ? { body: JSON.stringify(form) } : {}),
+        ...(method === 'PUT' ? { body: JSON.stringify(suffix === '/primary' ? primaryForm : form) } : {}),
       });
       const value = await response.json();
       if (!response.ok) throw new Error(value.error || 'OBS request failed');
       setSnapshot(value);
-      if (method === 'PUT') {
+      if (suffix === '/primary') {
+        setPrimaryForm(previous => ({ ...previous, ...value.primaryConnection, password: '', clearPassword: false }));
+        setNotice('Primary connection saved. Sarah is connecting to that computer.');
+      } else if (suffix === '/primary/test') {
+        setNotice('Primary OBS responded. Connection verified.');
+      } else if (method === 'PUT') {
         setForm((previous) => ({ ...previous, ...value.settings, password: '', clearPassword: false }));
         setNotice(value.settings.enabled ? 'Saved. Sarah is connecting to secondary OBS.' : 'Secondary recording disabled.');
       } else setNotice(suffix === '/test' ? 'Secondary OBS responded. No recording was started.' : 'Secondary start requested.');
@@ -65,9 +72,32 @@ export default function ObsRecordingSync() {
     {enabled && <p className="mt-2 text-xs text-muted-foreground">Start from Sarah to send both recording commands together. Starting primary OBS directly also starts the secondary. One session; primary controls stop/pause/resume.</p>}
     {timing && enabled && <p className="mt-2 text-sm">Estimated start difference: <strong>{timing.estimatedStartDifferenceMs > 0 ? '+' : ''}{timing.estimatedStartDifferenceMs} ms</strong>
       <span className="ml-2 text-xs text-muted-foreground">Secondary minus primary · network uncertainty ±{timing.networkUncertaintyMs} ms · frame alignment not measured</span></p>}
-    {(error || connectionError || (enabled && snapshot?.secondary?.error)) && <p role="alert" className="mt-2 text-sm text-destructive">{error || connectionError || snapshot.secondary.error}</p>}
+    {(error || connectionError || snapshot?.primary?.error || (enabled && snapshot?.secondary?.error)) && <p role="alert" className="mt-2 text-sm text-destructive">{error || connectionError || snapshot?.primary?.error || snapshot.secondary.error}</p>}
+    {notice && <p role="status" className="mt-2 text-sm text-muted-foreground">{notice}</p>}
     {enabled && snapshot?.run?.warnings?.map((warning) => <p key={warning} className="mt-2 text-sm text-amber-500">{warning}</p>)}
     {enabled && snapshot?.primary?.recording && !snapshot?.secondary?.recording && <button type="button" className="mt-2 rounded-lg border border-border px-3 py-2 text-sm" disabled={busy || !snapshot?.secondary?.connected} onClick={() => action('/start-secondary')}>Start missing secondary recording</button>}
+    {snapshot?.primaryConnection && <details className="mt-3" open={!snapshot.primary?.identified}>
+      <summary className="cursor-pointer text-sm font-semibold text-primary">Primary recorder connection</summary>
+      <div className="mt-3 space-y-3">
+        <p className="text-sm text-muted-foreground">Use the address of the computer running OBS. For the Linux laptop, use its Tailscale address and the WebSocket port shown in OBS.</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="text-sm">Primary OBS address<input aria-label="Primary OBS address" className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2"
+            placeholder="ws://laptop-address:4455" value={primaryForm.url} disabled={locked} onChange={event => setPrimaryForm({ ...primaryForm, url: event.target.value })} /></label>
+          <label className="text-sm">Primary WebSocket password<input aria-label="Primary OBS password" type="password" autoComplete="new-password"
+            className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2" value={primaryForm.password} disabled={locked}
+            placeholder={snapshot.primaryConnection.passwordSaved ? 'Saved · leave blank to keep' : 'Password from OBS'}
+            onChange={event => setPrimaryForm({ ...primaryForm, password: event.target.value })} /></label>
+        </div>
+        {snapshot.primaryConnection.passwordSaved && <label className="flex items-center gap-2 text-xs">
+          <input type="checkbox" checked={primaryForm.clearPassword} disabled={locked}
+            onChange={event => setPrimaryForm({ ...primaryForm, clearPassword: event.target.checked })} />Clear saved primary password
+        </label>}
+        <div className="flex flex-wrap gap-2">
+          <button type="button" disabled={locked} onClick={() => action('/primary', 'PUT')} className="min-h-10 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40">Save primary connection</button>
+          <button type="button" disabled={busy || !snapshot.primary?.identified} onClick={() => action('/primary/test')} className="min-h-10 rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-40">Check primary connection</button>
+        </div>
+      </div>
+    </details>}
     <details className="mt-2">
       <summary className="cursor-pointer text-sm text-primary">Secondary camera recorder setup</summary>
       <div className="mt-3 space-y-3">
@@ -79,7 +109,6 @@ export default function ObsRecordingSync() {
         </div>
         {snapshot?.settings?.passwordSaved && <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.clearPassword} disabled={locked} onChange={(event) => setForm({ ...form, clearPassword: event.target.checked })} />Clear saved password</label>}
         <div className="flex gap-2"><button type="button" disabled={locked} onClick={() => action('', 'PUT')} className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40">Save connection</button><button type="button" disabled={busy || !enabled} onClick={() => action('/test')} className="rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-40">Check connection</button></div>
-        {notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
       </div>
     </details>
     {enabled && (snapshot?.run?.primary?.outputPath || snapshot?.run?.secondary?.outputPath) && <details className="mt-2 text-xs"><summary className="cursor-pointer">Saved recording locations</summary><p className="mt-2 break-all">Primary: {snapshot.run.primary.outputPath || 'Waiting for file location'}</p><p className="break-all">Secondary ({snapshot.settings.url}): {snapshot.run.secondary.outputPath || 'Waiting for file location'}</p></details>}

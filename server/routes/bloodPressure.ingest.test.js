@@ -102,7 +102,10 @@ test('camera session saves without an external recorder, merging BP history and 
   const body = {
     session_id: randomUUID(), capture_kind: 'body_exploration',
     video_start_timestamp: at(0), video_stop_timestamp: at(45000), video_filename: 'test.webm',
-    annotations: [{ id: 'voice', time_s: 2, note: 'test' }],
+    annotations: [
+      { id: 'voice', time_s: 2, note: 'test' },
+      { id: 'volume', time_s: 3, note: 'Rectal fluid logged', procedure_measurement: { type: 'enema_instilled_volume', amount_ml: 60 } },
+    ],
     blood_pressure_snapshots: [reading('camera-offline', 5000), reading('camera-unknown', 8000, 'received_at')],
   };
   const save = async () => {
@@ -116,7 +119,8 @@ test('camera session saves without an external recorder, merging BP history and 
   assert.equal(confirmation.entity, 'BodyExploration');
   assert.equal(confirmation.bloodPressureCount, 2);
   const id = body.session_id;
-  assert.deepEqual(getEntity('BodyExploration', id).event_timeline.map(event => event.time_s), [2, 5, 10]);
+  assert.deepEqual(getEntity('BodyExploration', id).event_timeline.map(event => event.time_s), [2, 3, 5, 10]);
+  assert.equal(getEntity('BodyExploration', id).enema_instilled_total_ml, 60);
   assert.equal(getEntity('BloodPressureReading', 'bp-camera-unknown'), null);
   upsertEntity('BodyExploration', id, { notes: 'Edited after recording' });
   assert.equal((await save()).bloodPressureCount, 2);

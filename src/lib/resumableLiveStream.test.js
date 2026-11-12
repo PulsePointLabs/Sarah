@@ -1,11 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createResumableLiveStream, mergeMonitoringPoints, ownsMonitoringHistory, freshTelemetryTimestamp } from './resumableLiveStream.js';
+import { createResumableLiveStream, mergeMonitoringPoints, ownsMonitoringHistory, freshTelemetryTimestamp, canUseServerPrediction, preferLiveHrTelemetry } from './resumableLiveStream.js';
 
 test('idle monitoring uses preview history; active and paused sessions remain server-owned', () => {
   assert.equal(ownsMonitoringHistory({version:1,active:false,point:null}),false);
   assert.equal(ownsMonitoringHistory({version:1,active:true}),true);
   assert.equal(ownsMonitoringHistory({version:1,active:false,paused:true}),true);
+});
+
+test('an inactive or stale server cannot hide current H10 preview physiology', () => {
+  const now = 1790900000000;
+  const hr = { source: 'direct_h10', measuredAt: now };
+  const monitor = { version: 1, active: true, latestAt: now, prediction: { nearClimax: 72 } };
+  assert.equal(canUseServerPrediction(monitor, hr, now), true);
+  assert.equal(canUseServerPrediction({ ...monitor, active: false }, hr, now), false);
+  assert.equal(canUseServerPrediction({ ...monitor, paused: true }, hr, now), false);
+  assert.equal(canUseServerPrediction({ ...monitor, latestAt: now - 6000 }, hr, now), false);
+  assert.equal(preferLiveHrTelemetry({ ...hr, measuredAt: now - 10000 }, hr, now), hr);
+  assert.equal(preferLiveHrTelemetry(null, hr, now), hr);
 });
 test('preview samples retain receipt time and reject stale, future and missing timestamps', () => {
   const now=1790900000000;

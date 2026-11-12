@@ -1,8 +1,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { liveCaptureConfig } from '../config.js';
-import { ObsRecordingCoordinator, setObsRecordingCoordinator } from './obsRecordingCoordinator.js';
+import { dataDir, liveCaptureConfig } from '../config.js';
+import { ObsRecordingCoordinator, setObsRecordingCoordinator, validateObsAddress, canonicalObsEndpoint } from './obsRecordingCoordinator.js';
 
 const TZ = 'America/New_York';
 
@@ -109,7 +109,7 @@ function sha256Base64(input) {
 }
 
 export class HeartRateRelay {
-  constructor({ WebSocket, WebSocketServer }) {
+  constructor({ WebSocket, WebSocketServer, primarySettingsPath = path.join(dataDir, 'obs-recording', 'primary.json') }) {
     this.WebSocket = WebSocket;
     this.WebSocketServer = WebSocketServer;
     this.latestConfig = { ...DEFAULT_CONFIG };
@@ -130,10 +130,18 @@ export class HeartRateRelay {
     this.obsWasEverConnected = false;
     this.appWss = null;
     this.stopped = false;
+    this.primarySettingsPath = primarySettingsPath;
+    try {
+      const saved = JSON.parse(fs.readFileSync(this.primarySettingsPath, 'utf8'));
+      liveCaptureConfig.hrObsWsUrl = validateObsAddress(saved.url);
+      liveCaptureConfig.hrObsPassword = typeof saved.password === 'string' ? saved.password : '';
+    } catch { /* Environment settings remain the fallback until a connection is saved. */ }
     this.recordingCoordinator = new ObsRecordingCoordinator({
       primary: {
         request: (type) => this.obsRequest(type),
         status: () => ({ identified: this.obsIdentified, connected: this.obsConnected, recording: this.obsRecordActive, paused: this.obsRecordPaused, error: this.obsError }),
+        connection: () => ({ url: liveCaptureConfig.hrObsWsUrl, passwordSaved: Boolean(liveCaptureConfig.hrObsPassword) }),
+        saveConnection: input => this.savePrimaryObsConnection(input),
       },
       onChange: (snapshot) => this.broadcast({ type: 'obs_recording_sync', sync: snapshot.run }),
     });
@@ -193,6 +201,38 @@ export class HeartRateRelay {
       },
       obsSync: this.recordingCoordinator.snapshot(),
     };
+  }
+
+  savePrimaryObsConnection(input = {}) {
+    if (this.obsRecordActive || this.recordingCoordinator.secondary.recording
+        || this.recordingCoordinator.inflight.size || this.obsPending.size) {
+      throw new Error('Wait until recordings and pending OBS commands have finished before changing the primary connection.');
+    }
+    const url = validateObsAddress(input.url || liveCaptureConfig.hrObsWsUrl);
+    const secondary = this.recordingCoordinator.settings;
+    if (secondary.enabled && canonicalObsEndpoint(url) === canonicalObsEndpoint(secondary.url)) {
+      throw new Error('Primary and secondary recorders must use different OBS instances.');
+    }
+    const password = input.clearPassword ? '' : input.password || liveCaptureConfig.hrObsPassword || '';
+    if (typeof password !== 'string') throw new Error('Enter a text WebSocket password.');
+    fs.mkdirSync(path.dirname(this.primarySettingsPath), { recursive: true });
+    fs.writeFileSync(`${this.primarySettingsPath}.tmp`, JSON.stringify({ url, password }), { mode: 0o600 });
+    fs.renameSync(`${this.primarySettingsPath}.tmp`, this.primarySettingsPath);
+    clearTimeout(this.obsReconnectTimer);
+    const old = this.obsSocket;
+    if (old) {
+      old.removeAllListeners();
+      old.on('error', () => {});
+      old.close();
+    }
+    this.obsConnected = false;
+    this.obsIdentified = false;
+    this.obsError = null;
+    liveCaptureConfig.hrObsWsUrl = url;
+    liveCaptureConfig.hrObsPassword = password;
+    this.connectObs();
+    this.broadcastRelayStatus();
+    return this.recordingCoordinator.snapshot();
   }
 
   broadcastRelayStatus(except = null) {

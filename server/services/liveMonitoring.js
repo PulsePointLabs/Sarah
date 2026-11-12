@@ -18,6 +18,7 @@ export class LiveMonitoring {
     this.sessionId = sessionId; this.count = count; this.history = [];
     this.prediction = null; this.basePrediction = null; this.latestAt = null;
     this.candidateSince = null; this.belowSince = null; this.inEpisode = false;
+    this.observationStartedAt = null;
   }
   update({ hr, emg, civet, sessionId, startedAt, active, paused, candidateCount = 0 }, now = Date.now()) {
     if (sessionId !== this.sessionId) this.reset(sessionId, candidateCount);
@@ -26,6 +27,8 @@ export class LiveMonitoring {
       this.candidateSince = null; this.belowSince = null;
       return this.snapshot(now, { paused, active });
     }
+    if (!sessionId && this.latestAt != null && at - this.latestAt > 60000) this.reset(null);
+    this.observationStartedAt ??= at;
     if (this.latestAt != null && at <= this.latestAt) return this.snapshot(now, { paused, active });
     if (this.latestAt != null && at - this.latestAt > 5000) {
       this.candidateSince = null; this.belowSince = null; this.inEpisode = false;
@@ -33,7 +36,7 @@ export class LiveMonitoring {
     const emgAt = stamp(emg?.source_at || emg?.receivedAt || emg?.engineReceivedAt);
     const liveEmg = Number.isFinite(emgAt) && Math.abs(at - emgAt) < 5000 ? emg : null;
     const hrv = hr.hrv || {}, multi = hr.multimodal || {};
-    const start = stamp(startedAt);
+    const start = stamp(startedAt) || this.observationStartedAt;
     const point = {
       ts: at, time: new Date(at).toLocaleTimeString([], { minute: '2-digit', second: '2-digit' }),
       sessionTimeSec: Number.isFinite(start) ? Math.max(0, (at - start) / 1000) : 0,
@@ -75,7 +78,7 @@ export class LiveMonitoring {
               confirmation_count: prediction.confirmationCount, reason: prediction.reason, evidence_status: 'physiology_only' },
           };
           // Advance only after the event has been durably accepted; retry on storage failure.
-          this.onCandidate(event);
+          if (sessionId) this.onCandidate(event);
           this.count++; this.inEpisode = true; this.candidateSince = null;
         }
       }
@@ -91,6 +94,8 @@ export class LiveMonitoring {
   }
   snapshot(now = Date.now(), { active = true, paused = false } = {}) {
     return { version: 1, sessionId: this.sessionId, active, paused,
+      mode: this.sessionId ? 'recording' : 'passive',
+      observationStartedAt: this.observationStartedAt,
       stale: this.latestAt == null || now - this.latestAt > 5000 || !active || paused,
       latestAt: this.latestAt, point: this.history.at(-1) || null,
       prediction: this.prediction, basePrediction: this.basePrediction, candidateCount: this.count, historySize: this.history.length };

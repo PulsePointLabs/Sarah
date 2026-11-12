@@ -9,23 +9,28 @@ let instance = null;
 export const getObsRecordingCoordinator = () => instance;
 export const setObsRecordingCoordinator = (value) => { instance = value; };
 
+export function canonicalObsEndpoint(value) {
+  const item = new URL(value);
+  const local = new Set(['localhost', '127.0.0.1', '[::1]', os.hostname().toLowerCase(),
+    ...Object.values(os.networkInterfaces()).flat().filter(Boolean).map(network => network.address)]);
+  return `${local.has(item.hostname.toLowerCase()) ? 'loopback' : item.hostname}:${item.port || '4455'}`;
+}
+
+export function validateObsAddress(raw) {
+  const parsed = new URL(String(raw || '').trim());
+  if (!['ws:', 'wss:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') {
+    throw new Error('Use an OBS address such as ws://laptop-address:4455. Enter the password separately.');
+  }
+  return parsed.href;
+}
+
 export function validateSecondarySettings(input, previous = {}) {
   const enabled = input.enabled === true;
   const raw = String(input.url ?? previous.url ?? '').trim();
   let url = '';
   if (raw) {
-    const parsed = new URL(raw);
-    if (!['ws:', 'wss:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') {
-      throw new Error('Use an OBS WebSocket address such as ws://second-computer:4455. Enter its password separately.');
-    }
-    const canonical = (value) => {
-      const item = new URL(value);
-      const local = new Set(['localhost', '127.0.0.1', '[::1]', os.hostname().toLowerCase(),
-        ...Object.values(os.networkInterfaces()).flat().filter(Boolean).map((network) => network.address)]);
-      return `${local.has(item.hostname.toLowerCase()) ? 'loopback' : item.hostname}:${item.port || '4455'}`;
-    };
-    if (canonical(raw) === canonical(liveCaptureConfig.hrObsWsUrl)) throw new Error('Secondary OBS must be a different OBS instance from the primary.');
-    url = parsed.href;
+    url = validateObsAddress(raw);
+    if (canonicalObsEndpoint(url) === canonicalObsEndpoint(liveCaptureConfig.hrObsWsUrl)) throw new Error('Secondary OBS must be a different OBS instance from the primary.');
   }
   if (enabled && !url) throw new Error('Enter the secondary OBS address before enabling it.');
   return { enabled, url, password: input.clearPassword ? '' : input.password || previous.password || '' };
@@ -55,7 +60,8 @@ export class ObsRecordingCoordinator {
   close() { clearInterval(this.pollTimer); this.peer?.close(); }
   publicSettings() { const { enabled, url, password } = this.settings; return { enabled, url, passwordSaved: Boolean(password) }; }
   snapshot() {
-    return { settings: this.publicSettings(), primary: this.primary.status(), secondary: { ...this.secondary, connected: Boolean(this.peer?.ready) }, run: this.run };
+    return { settings: this.publicSettings(), primary: this.primary.status(), primaryConnection: this.primary.connection?.(),
+      secondary: { ...this.secondary, connected: Boolean(this.peer?.ready) }, run: this.run };
   }
   changed() {
     const snapshot = this.snapshot();

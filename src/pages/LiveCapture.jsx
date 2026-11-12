@@ -8,8 +8,9 @@ import CivetLiveAlert from "@/components/CivetLiveAlert.jsx";
 import CivetSetup from "@/components/CivetSetup.jsx";
 import { useCivetLive } from "@/hooks/useCivet.js";
 import { withCivetEvidence } from "@/lib/civet.js";
-import { createResumableLiveStream, mergeMonitoringPoints, ownsMonitoringHistory, freshTelemetryTimestamp } from "@/lib/resumableLiveStream";
+import { createResumableLiveStream, mergeMonitoringPoints, ownsMonitoringHistory, canUseServerPrediction, preferLiveHrTelemetry, freshTelemetryTimestamp } from "@/lib/resumableLiveStream";
 import StableTelemetryText from "@/components/StableTelemetryText";
+import { deriveLiveHrTelemetry } from "@/lib/liveHrDerivation";
 import EditableTelemetryPanel from "@/components/EditableTelemetryPanel";
 import ViewportTelemetryGrid from "@/components/ViewportTelemetryGrid";
 import EmgSetup from "@/components/EmgSetup";
@@ -1683,7 +1684,10 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const [activeSessionDoc, setActiveSessionDoc] = useState(null);
   const [connected, setConnected] = useState(false);
   const [telemetryHistory, setTelemetryHistory] = useState([]);
+  const localObservationRef = useRef({ key: null, startedAt: null, lastAt: null });
+  const localHrDerivationRef = useRef(new Map());
   const serverMonitoringRef = useRef(false);
+  const serverMonitoringSnapshotRef = useRef(null);
   const serverMonitoringSessionRef = useRef(null);
   const [liveEvents, setLiveEvents] = useState([]);
   const [phaseMarkers, setPhaseMarkers] = useState([]);
@@ -1705,7 +1709,8 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   });
   const [hrLossDialog, setHrLossDialog] = useState(null);
   const [h10Multimodal, setH10Multimodal] = useState(() => emptyH10MultimodalSnapshot());
-  const [captureKind, setCaptureKind] = useState("session");
+  const [captureKind, setCaptureKind] = useState(() =>
+    searchParams.get("captureKind") || localStorage.getItem("pulsepoint.captureKind") || readLiveCaptureLaunchProfile().captureKind || "session");
   const [captureKindError, setCaptureKindError] = useState("");
   const [captureMode, setCaptureMode] = useState(() => localStorage.getItem("pulsepoint.captureMode") || "full");
   const [emgSensorConfig, setEmgSensorConfig] = useState(() => localStorage.getItem("pulsepoint.emgSensorConfig") || "generic");
@@ -1763,10 +1768,10 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     } catch(error) {toast({title:'Could not open full screen',description:error.message});}
   },[toast]);
   const openTelemetryScreen = useCallback(()=>{
-    const url=new URL(window.location.href);url.searchParams.set('display','telemetry');url.searchParams.set('standalone','1');
+    const url=new URL(window.location.href);url.searchParams.set('display','telemetry');url.searchParams.set('standalone','1');url.searchParams.set('captureKind',captureKind);
     const screen=window.open(url.href,'sarah-live-telemetry','popup,width=1440,height=900');
     if(!screen)toast({title:'Allow popups for Sarah to open the telemetry screen'});
-  },[toast]);
+  },[captureKind,toast]);
   useEffect(()=>{
     const changed=()=>setTelemetryFullscreen(document.fullscreenElement===telemetryDisplayRef.current && Boolean(document.fullscreenElement));
     const key=event=>{if(telemetryFocusView && event.key.toLowerCase()==='f' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.target.closest('input,textarea,select,[role=menu],[contenteditable=true]')){event.preventDefault();void toggleTelemetryFullscreen();}};
@@ -1979,9 +1984,17 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const howlFocusedFieldRef = useRef("");
   const launchInFlightRef = useRef(null);
   const restoredLaunchProfileRef = useRef(false);
-  const liveRecordEntity = liveSession?.entity || (captureKind === "body_exploration" ? "BodyExploration" : "Session");
+  const liveRecordEntity = (liveSession?.active ? liveSession.entity : null) || (captureKind === "body_exploration" ? "BodyExploration" : "Session");
   const liveRecordApi = base44.entities[liveRecordEntity] || base44.entities.Session;
   const captureIsBodyExploration = liveRecordEntity === "BodyExploration" || captureKind === "body_exploration";
+  const telemetryDefinitions = TELEMETRY_DASHBOARD_PANELS.map(panel => {
+    if (!captureIsBodyExploration) return panel;
+    if (panel.id === "phase") return { ...panel, label: "Procedure response", helper: "Observed HR response, logged fluid and procedure notes" };
+    if (panel.id === "threshold") return { ...panel, label: "Procedure Response Trend", helper: "HR change and measured RMSSD" };
+    if (panel.id === "cardiac") return { ...panel, helper: "HR, baseline and HRV during procedures" };
+    return panel;
+  });
+
 
   useEffect(() => {
     directH10StatusRef.current = directH10Status;
@@ -2011,7 +2024,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     restoredLaunchProfileRef.current = true;
     const profile = readLiveCaptureLaunchProfile();
     setLaunchProfile(profile);
-    setCaptureKind(profile.captureKind || "session");
+    setCaptureKind(searchParams.get("captureKind") || localStorage.getItem("pulsepoint.captureKind") || profile.captureKind || "session");
     setCaptureMode(profile.captureMode || "full");
     setEmgSensorConfig(profile.emgSensorConfig || "generic");
     setTelemetryNoticesEnabled(profile.telemetryNoticesEnabled !== false);
@@ -2357,6 +2370,16 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       },
     };
 
+    const localTelemetry = deriveLiveHrTelemetry(telemetry, localHrDerivationRef.current);
+    const latestAt = freshTelemetryTimestamp(latestHrRef.current, null) || 0;
+    if (receivedAt >= latestAt) {
+      latestHrRef.current = localTelemetry;
+      setHrTelemetry(localTelemetry);
+      if (phoneCaptureRef.current || !canUseServerPrediction(serverMonitoringSnapshotRef.current, localTelemetry)) {
+        appendTelemetryPointRef.current(localTelemetry, latestEmgRef.current);
+      }
+    }
+
     setDirectH10Status((prev) => ({
       ...prev,
       connected: true,
@@ -2410,11 +2433,20 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const appendTelemetryPoint = (nextHr = latestHrRef.current, nextEmg = latestEmgRef.current) => {
     const sampleAt = freshTelemetryTimestamp(nextHr, nextEmg);
     if (sampleAt == null) return;
-    setTelemetryHistory((prev) => {
+    const key = phoneCaptureRef.current?.id || (liveSession?.active ? liveSession.activeSessionId : "passive");
+    const observation = localObservationRef.current;
+    const reset = observation.key !== key || sampleAt - observation.lastAt > 60000;
+    if (reset || observation.startedAt == null) {
+      localObservationRef.current = { key, startedAt: sampleAt, lastAt: sampleAt };
+    } else {
+      observation.lastAt = Math.max(observation.lastAt || 0, sampleAt);
+    }
+    setTelemetryHistory((previousHistory) => {
+      const prev = reset ? [] : previousHistory;
       if (prev.at(-1)?.ts >= sampleAt) return prev;
       const point = makeTelemetryPoint(nextHr, nextEmg, {
         sampleAt,
-        sessionTimeSec: getCurrentSessionTime(),
+        sessionTimeSec: key === "passive" ? Math.max(0, (sampleAt - localObservationRef.current.startedAt) / 1000) : getCurrentSessionTime(),
         howlIntensity: readHowlChannelIntensity(howlTelemetry, howlCommandForm.channel),
       });
       const previous = prev[prev.length - 1];
@@ -3666,9 +3698,10 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     const generation = ++refreshGeneration;
     fetch(apiUrl("/live-capture/status"), { cache: "no-store" }).then((res) => res.json()).then((data) => {
       if (disposed || generation !== refreshGeneration) return;
-      serverMonitoringRef.current = ownsMonitoringHistory(data.monitoring);
+      serverMonitoringSnapshotRef.current = data.monitoring;
+      serverMonitoringRef.current = ownsMonitoringHistory(data.monitoring) && !phoneCaptureRef.current;
       setStatus(data);
-      const nextHr = data.hr?.latestTelemetry || null;
+      const nextHr = preferLiveHrTelemetry(data.hr?.latestTelemetry || null, latestHrRef.current);
       const nextEmg = data.emg?.latestTelemetry || null;
       latestHrRef.current = nextHr;
       latestEmgRef.current = nextEmg;
@@ -3697,8 +3730,9 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     events.onerror = () => setConnected(false);
     events.addEventListener("status", (event) => {
       const data = JSON.parse(event.data);
-      serverMonitoringRef.current = ownsMonitoringHistory(data.monitoring);
-      const nextHr = data.hr?.latestTelemetry || null;
+      serverMonitoringSnapshotRef.current = data.monitoring;
+      serverMonitoringRef.current = ownsMonitoringHistory(data.monitoring) && !phoneCaptureRef.current;
+      const nextHr = preferLiveHrTelemetry(data.hr?.latestTelemetry || null, latestHrRef.current);
       const nextEmg = data.emg?.latestTelemetry || null;
       latestHrRef.current = nextHr;
       latestEmgRef.current = nextEmg;
@@ -3723,14 +3757,15 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     });
     events.addEventListener("telemetry_snapshot", (event) => {
       const snapshot = JSON.parse(event.data);
-      const nextHr = snapshot.hr || latestHrRef.current;
+      serverMonitoringSnapshotRef.current = snapshot.monitoring;
+      const nextHr = preferLiveHrTelemetry(snapshot.hr || null, latestHrRef.current);
       const nextEmg = snapshot.emg || latestEmgRef.current;
       latestHrRef.current = nextHr;
       latestEmgRef.current = nextEmg;
       setStatus((prev) => ({ ...(prev || {}), engine: snapshot.engine || null, monitoring: snapshot.monitoring || prev?.monitoring }));
       setHrTelemetry(nextHr);
       setEmgTelemetry(nextEmg);
-      if (ownsMonitoringHistory(snapshot.monitoring)) {
+      if (ownsMonitoringHistory(snapshot.monitoring) && !phoneCaptureRef.current) {
         serverMonitoringRef.current = true;
         const sameSession = serverMonitoringSessionRef.current === snapshot.monitoring.sessionId;
         serverMonitoringSessionRef.current = snapshot.monitoring.sessionId;
@@ -3759,6 +3794,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
 
   useEffect(() => {
     localStorage.setItem("pulsepoint.captureKind", captureKind);
+    if (detachedTelemetry) return;
     setCaptureKindError("");
     fetch(apiUrl("/live-capture/capture-kind"), {
       method: "POST",
@@ -3773,7 +3809,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       .catch((error) => {
         setCaptureKindError(error?.message || "Could not update capture type.");
       });
-  }, [captureKind]);
+  }, [captureKind, detachedTelemetry]);
 
   useEffect(() => {
     localStorage.setItem("pulsepoint.captureMode", captureMode);
@@ -3887,17 +3923,18 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     );
   }, [hrTelemetry]);
 
-  const prediction = useMemo(() => (!cameraRecording && status?.monitoring?.basePrediction) || computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory, {
-    sessionTimeSec: getCurrentSessionTime(),
-  }), [cameraRecording, status?.monitoring?.basePrediction, emgTelemetry, getCurrentSessionTime, hrTelemetry, telemetryHistory]);
-  const monitoringPrediction = useMemo(() => (!cameraRecording && status?.monitoring?.prediction) || withCivetEvidence(prediction, civet.latest, Math.max(emgTelemetry?.left_pct || emgTelemetry?.level_pct || 0, emgTelemetry?.right_pct || 0)), [cameraRecording, status?.monitoring?.prediction, prediction, civet.latest, emgTelemetry]);
+  const serverPredictionReady = !cameraRecording && canUseServerPrediction(status?.monitoring, hrTelemetry);
+  const prediction = useMemo(() => (serverPredictionReady && status?.monitoring?.basePrediction) || computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory, {
+    sessionTimeSec: cameraRecording || liveSession?.active ? getCurrentSessionTime() : telemetryHistory.at(-1)?.sessionTimeSec,
+  }), [cameraRecording, liveSession?.active, serverPredictionReady, status?.monitoring?.basePrediction, emgTelemetry, getCurrentSessionTime, hrTelemetry, telemetryHistory]);
+  const monitoringPrediction = useMemo(() => (serverPredictionReady && status?.monitoring?.prediction) || withCivetEvidence(prediction, civet.latest, Math.max(emgTelemetry?.left_pct || emgTelemetry?.level_pct || 0, emgTelemetry?.right_pct || 0)), [serverPredictionReady, status?.monitoring?.prediction, prediction, civet.latest, emgTelemetry]);
   const recordingTransportActive = Boolean(recording?.active);
   const recordingPaused = Boolean(recordingTransportActive && recording?.paused);
   const recordingActive = Boolean(recordingTransportActive && !recordingPaused);
 
   useEffect(() => {
     const tracker = nearClimaxEpisodeRef.current;
-    if (status?.monitoring?.version === 1) {
+    if (serverPredictionReady) {
       setNearClimaxEpisodeCount(status.monitoring.candidateCount || 0);
       return;
     }
@@ -3952,7 +3989,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       tracker.active = false;
       tracker.belowSince = 0;
     }
-  }, [getCurrentSessionTime, monitoringPrediction, recordingPaused, recordingTransportActive, status?.monitoring]);
+  }, [getCurrentSessionTime, monitoringPrediction, recordingPaused, recordingTransportActive, serverPredictionReady, status?.monitoring]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4139,17 +4176,20 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const leftEmgLevel = readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct);
   const rightEmgLevel = readNumber(emgTelemetry?.right_pct);
   const displayedHr = heldCurrentHr;
-  const serverMonitoringFresh = status?.monitoring?.version === 1 && !status.monitoring.stale
-    && !status.monitoring.error && liveHealthNowMs - Number(status.monitoring.latestAt || 0) < 5000;
-  const monitoringHelper = displayCameraRecording ? "Monitoring the local capture" : status?.monitoring?.version === 1
-    ? status.monitoring.error ? `Server monitoring error: ${status.monitoring.error}`
-      : !status.monitoring.active ? "Server monitor ready · start a session"
-        : status.monitoring.paused ? "Session paused"
-          : serverMonitoringFresh ? "Live server monitoring · independent of phone screen" : "Server monitoring waiting for fresh data"
-    : "Local screen monitoring · update the Sarah server";
-  const displayedNearClimax = !cameraRecording && status?.monitoring?.version === 1
-    ? serverMonitoringFresh ? status.monitoring.prediction?.nearClimax : null
-    : heldTelemetryValue(telemetryHistory, "nearClimax", recentHrPacket ? monitoringPrediction.nearClimax : null);
+  const hrResponseDelta = displayedHr != null && Number(heldBaselineHr) > 0 ? displayedHr - heldBaselineHr : null;
+  const currentObservation = telemetryHistory.at(-1);
+  const priorObservation = currentObservation
+    ? telemetryHistory.findLast(point => point.ts <= currentObservation.ts - 30000 && point.hr != null) : null;
+  const hrChange30s = priorObservation && displayedHr != null ? displayedHr - priorObservation.hr : null;
+  const procedureRecord = phoneCaptureRef.current || (liveSession?.active ? activeSessionDoc : null);
+  const procedureEvents = procedureRecord?.event_timeline || [];
+  const loggedInstilledMl = sumEnemaInstilledVolume(procedureEvents);
+  const monitoringHelper = status?.monitoring?.paused && !cameraRecording ? "Recording paused"
+    : !recentHrPacket ? "Waiting for fresh heart-rate data"
+    : serverPredictionReady ? status.monitoring.mode === "passive" ? "Passive physiology monitoring" : "Live session monitoring"
+    : cameraRecording ? "Monitoring the local capture" : "Passive physiology monitoring on this screen";
+  const displayedNearClimax = recentHrPacket && !(!cameraRecording && status?.monitoring?.paused)
+    ? monitoringPrediction.nearClimax : null;
   const displayedRrCount = heldTelemetryValue(telemetryHistory, "rrCount", rrCount);
   const displayedRmssd = heldTelemetryValue(telemetryHistory, "hrvRmssd", hrvRmssd);
   const displayedSdnn = heldTelemetryValue(telemetryHistory, "hrvSdnn", hrvSdnn);
@@ -4203,6 +4243,30 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const quickEventPads = useMemo(() => (
     captureIsBodyExploration
       ? [
+        {
+          key: "instillation",
+          label: "Instillation",
+          category: ["instrumentation", "procedure"],
+          note: "Instillation marked. Volume can be recorded in a voice note.",
+        },
+        {
+          key: "drainage",
+          label: "Drainage",
+          category: ["physical", "procedure"],
+          note: "Drainage observed.",
+        },
+        {
+          key: "cramping",
+          label: "Cramping",
+          category: ["sensation", "comfort"],
+          note: "Cramping reported.",
+        },
+        {
+          key: "procedure_pause",
+          label: "Procedure Pause",
+          category: ["procedure", "comfort"],
+          note: "Procedure paused.",
+        },
         {
           key: "instrument_change",
           label: "Instrument Change",
@@ -4350,6 +4414,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   ) ?? 0;
   const physiologyChartData = useMemo(() => telemetryHistory.map((point) => ({
     ...point,
+    hrDelta: point.hr != null && point.baseline != null ? point.hr - point.baseline : null,
     motionLoad: point.motionRms == null ? null : Math.min(100, Number(point.motionRms) / 3.6),
     howlDose: point.howlIntensity == null || howlControlCeiling <= 0
       ? null
@@ -4636,13 +4701,13 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   }, [telemetryDashboard]);
 
   const telemetryPanelLayout = useCallback((id) => {
-    const definition = TELEMETRY_DASHBOARD_PANELS.find((panel) => panel.id === id);
+    const definition = telemetryDefinitions.find((panel) => panel.id === id);
     const saved = telemetryDashboard.find((panel) => panel.id === id);
     return {
       cols: Math.max(3, Math.min(12, Number(saved?.cols) || definition?.cols || 6)),
       rows: Math.max(1, Math.min(8, Number(saved?.rows) || definition?.rows || 3)),
     };
-  }, [telemetryDashboard]);
+  }, [telemetryDashboard, captureIsBodyExploration]);
 
   const updateTelemetryPanel = useCallback((id, update) => {
     setTelemetryDashboard((previous) => previous.map((panel) => (
@@ -5019,6 +5084,14 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       .filter(Boolean)
       .filter(shouldKeepLiveSessionEvent);
     if (!additions.length && !Object.keys(extraPatch).length) return;
+    const camera = phoneCaptureRef.current;
+    if (camera) {
+      const events = new Map(camera.event_timeline.map((event, index) => [event.id || `existing-${index}`, event]));
+      for (const event of additions) events.set(event.id || crypto.randomUUID(), event);
+      Object.assign(camera, extraPatch, { event_timeline: [...events.values()].sort((a, b) => Number(a.time_s || 0) - Number(b.time_s || 0)) });
+      setLiveEvents(camera.event_timeline);
+      return;
+    }
     const save = async () => {
       const sessionState = liveSession?.activeSessionId ? liveSession : await ensureSession();
       const sessionId = sessionState?.activeSessionId;
@@ -6851,7 +6924,8 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       </div>
       <div className="mt-3 rounded-lg border border-border bg-muted/25 px-3 py-2">
         <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Commands: “Sarah”, “end”, “undo last”, “mark climax”, “Sarah set Howl intensity to 10”, “Sarah switch to milkmaster mode”
+          {captureIsBodyExploration ? "Say “Sarah”, wait for the tone, then dictate a procedure note. Say “60 milliliters instilled” to log rectal fluid, or “undo last” to remove the last note."
+              : "Commands: “Sarah”, “end”, “undo last”, “mark climax”, “Sarah set Howl intensity to 10”, “Sarah switch to milkmaster mode”"}
         </p>
       </div>
       {recentLiveEvents.length > 0 && (
@@ -7221,7 +7295,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
                 <>
                   <CompactStat compact
                     label="Near-Climax Watch"
-                    value={`${fmtNumber(displayedNearClimax, 0)}%`}
+                    value={displayedNearClimax == null ? "--" : `${fmtNumber(displayedNearClimax, 0)}%`}
                     helper="live approach"
                     level={displayedNearClimax}
                   />
@@ -7532,7 +7606,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
 
   const renderTelemetryDashboardPanel = (id, content) => {
     if (!focusView) return <div className="contents">{content}</div>;
-    const definition = TELEMETRY_DASHBOARD_PANELS.find((panel) => panel.id === id);
+    const definition = telemetryDefinitions.find((panel) => panel.id === id);
     return <EditableTelemetryPanel id={id} label={definition.label} layout={telemetryPanelLayout(id)}
       order={telemetryPanelOrder(id)} selected={selectedTelemetryPanel === id} onSelect={setSelectedTelemetryPanel}
       onResize={(size) => updateTelemetryPanel(id, size)} onMove={(direction) => moveTelemetryPanel(id, direction)}
@@ -7661,7 +7735,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         </div>
       )}
 
-      {!focusView && showAdvancedSetupConsole && obsWorkflow && !phoneCaptureBusy && <ObsRecordingSync />}
+      {!focusView && showAdvancedSetupConsole && !phoneCaptureBusy && <ObsRecordingSync />}
 
       {externalRecorderControls && (recordingTransportActive || liveSession?.activeSessionId) && !focusView && !liveSession?.importing && (
         <button
@@ -7861,7 +7935,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       {!focusView && captureTab === "voice" && (
         <div className="space-y-3">
           {voiceAnnotationPanel}
-          <PhaseAnnouncementControls controller={phaseAnnouncements} />
+          <PhaseAnnouncementControls bodyExploration={captureIsBodyExploration} controller={phaseAnnouncements} />
           <LiveEncouragementControls
             enabled={liveCueSettings.enabled}
             volume={liveCueSettings.volume}
@@ -7887,10 +7961,10 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         </div>
       )}
 
-      {!focusView && captureTab === "camera" && !phoneOnly && (
+      {!focusView && !phoneOnly && (
         <label className="inline-flex items-center gap-2 text-sm font-medium">
           Record as
-          <select className="rounded-md border border-border bg-card px-3 py-2" value={captureKind} disabled={phoneCaptureBusy}
+          <select aria-label="Capture type" className="rounded-md border border-border bg-card px-3 py-2" value={captureKind} disabled={phoneCaptureBusy || Boolean(liveSession?.active)}
             onChange={event => setCaptureKind(event.target.value)}>
             {CAPTURE_KINDS.map(kind => <option key={kind.value} value={kind.value}>{kind.label}</option>)}
           </select>
@@ -9684,7 +9758,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
               </>
             )}
           </div>
-          {telemetryFocusView && <><PhaseAnnouncementControls controller={phaseAnnouncements} compact /><button type="button" className="mt-2 rounded-lg border border-border px-3 py-2 text-sm" onClick={() => { setTelemetryControlsOpen(false); document.activeElement?.blur(); }}>Hide controls</button></>}
+          {telemetryFocusView && <><PhaseAnnouncementControls bodyExploration={captureIsBodyExploration} controller={phaseAnnouncements} compact /><button type="button" className="mt-2 rounded-lg border border-border px-3 py-2 text-sm" onClick={() => { setTelemetryControlsOpen(false); document.activeElement?.blur(); }}>Hide controls</button></>}
           </div>
         </div>
 
@@ -9702,13 +9776,13 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
               </div>
               <fieldset className="mt-4 grid grid-cols-2 gap-2 rounded-lg border border-border p-3">
                 <legend className="px-2 text-sm font-semibold">Individual metric cards</legend>
-                {[...['Current HR', 'Blood Pressure', 'Near-Climax Watch', 'RR Samples', 'RMSSD', 'SDNN', 'Respiration', 'Chest Motion', 'Recovery'].map(label => ({ id: `metric:${label}`, label })), { id: 'metric:emg-left', label: emgNames[0] || 'EMG sensor 1' }, { id: 'metric:emg-right', label: emgNames[1] || 'EMG sensor 2' }].map(item => <label key={item.id} className="flex min-h-11 items-center gap-2 text-sm">
+                {[...['Current HR', 'Blood Pressure', ...(captureIsBodyExploration ? ['HR response', 'HR change'] : ['Near-Climax Watch']), 'RR Samples', 'RMSSD', 'SDNN', 'Respiration', 'Chest Motion', captureIsBodyExploration ? 'Below recent peak' : 'Recovery'].map(label => ({ id: `metric:${label}`, label })), { id: 'metric:emg-left', label: emgNames[0] || 'EMG sensor 1' }, { id: 'metric:emg-right', label: emgNames[1] || 'EMG sensor 2' }].map(item => <label key={item.id} className="flex min-h-11 items-center gap-2 text-sm">
                   <input type="checkbox" aria-label={`Show ${item.label} card`} checked={!hiddenTelemetryItems.includes(item.id)} onChange={event => { setTelemetryItemVisible(item.id, event.target.checked); if (event.target.checked) updateTelemetryPanel('vitals', { enabled: true }); }} />{item.label}
                 </label>)}
               </fieldset>
               <div className="mt-5 space-y-2">
                 {telemetryDashboard.map((item, index) => {
-                  const definition = TELEMETRY_DASHBOARD_PANELS.find((panel) => panel.id === item.id);
+                  const definition = telemetryDefinitions.find((panel) => panel.id === item.id);
                   if (!definition) return null;
                   return (
                     <div
@@ -9898,7 +9972,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
               <MetricCard
                 icon={<Brain className="w-4 h-4" />}
                 label="Near-Climax Watch"
-                value={`${fmtNumber(displayedNearClimax, 0)}%`}
+                value={displayedNearClimax == null ? "--" : `${fmtNumber(displayedNearClimax, 0)}%`}
                 helper={`${monitoringHelper} · ${nearClimaxEpisodeCount} high-probability episode${nearClimaxEpisodeCount === 1 ? "" : "s"}`}
                 active={displayedNearClimax >= 42}
                 level={displayedNearClimax}
@@ -9908,6 +9982,15 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
               />
             </>
           )}
+          {captureIsBodyExploration && <>
+            <MetricCard icon={<Activity className="w-4 h-4" />} label="HR response"
+              value={hrResponseDelta == null ? "--" : `${hrResponseDelta > 0 ? "+" : ""}${fmtNumber(hrResponseDelta, 0)}`}
+              helper="bpm from personal baseline" active={hrResponseDelta != null}
+              trendValues={physiologyChartData.map(point => point.hrDelta).filter(value => value != null)} large display={focusView} />
+            <MetricCard icon={<Activity className="w-4 h-4" />} label="HR change"
+              value={hrChange30s == null ? "--" : `${hrChange30s > 0 ? "+" : ""}${fmtNumber(hrChange30s, 0)}`}
+              helper="bpm change over the last 30 seconds" active={hrChange30s != null} large display={focusView} />
+          </>}
           {hrTelemetry?.source === "direct_h10" && (
             <>
               <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="RR Samples" value={fmtNumber(displayedRrCount, 0)} helper="rolling H10 interval window" active={Number(displayedRrCount) > 0} level={Math.min(100, (Number(displayedRrCount) || 0) * 1.25)} trendValues={telemetryTrendValues(telemetryHistory, "rrCount", displayedRrCount)} large display={focusView} />
@@ -9939,9 +10022,11 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
               />
               <MetricCard
                 icon={<RefreshCw className="w-4 h-4" />}
-                label="Recovery"
-                value={displayedRecoveryDrop != null ? `-${fmtNumber(displayedRecoveryDrop, 0)}` : "LEARNING"}
-                helper={h10Recovery.available ? `bpm from ${fmtNumber(h10Recovery.peakHr, 0)} peak · ${fmtNumber(h10Recovery.secondsSincePeak, 0)} s` : "learns after a sustained HR peak"}
+                label={captureIsBodyExploration ? "Below recent peak" : "Recovery"}
+                value={captureIsBodyExploration
+                  ? displayedHr != null ? fmtNumber(Math.max(0, monitoringPrediction.dropFromRecentPeak || 0), 0) : "--"
+                  : displayedRecoveryDrop != null && displayedRecoveryDrop >= 0 ? `-${fmtNumber(displayedRecoveryDrop, 0)}` : "LEARNING"}
+                helper={captureIsBodyExploration ? "bpm below the recent observed HR peak" : h10Recovery.available ? `bpm from ${fmtNumber(h10Recovery.peakHr, 0)} peak · ${fmtNumber(h10Recovery.secondsSincePeak, 0)} s` : "learns after a sustained HR peak"}
                 active={h10Recovery.available}
                 level={h10Recovery.available ? Math.min(100, Number(h10Recovery.currentDropBpm || 0) * 5) : 0}
                 trendValues={telemetryTrendValues(telemetryHistory, "recoveryDropBpm", displayedRecoveryDrop)}
@@ -9958,6 +10043,31 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
             </>
           )}
         </div>)}
+
+        {telemetryPanelEnabled("phase") && captureIsBodyExploration && renderTelemetryDashboardPanel("phase", (
+          <section className="h-full overflow-y-auto rounded-xl border border-border bg-card p-3" aria-label="Procedure observations">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-primary">Procedure response</h3>
+            <p className="mt-1 text-sm text-muted-foreground">Observed cardiovascular changes and your timestamped procedure notes.</p>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+              <div className="rounded-lg border border-border p-3"><span className="text-muted-foreground">HR from baseline</span>
+                <p className="text-xl font-semibold">{hrResponseDelta == null ? "--" : `${hrResponseDelta > 0 ? "+" : ""}${fmtNumber(hrResponseDelta, 0)} bpm`}</p></div>
+              <div className="rounded-lg border border-border p-3"><span className="text-muted-foreground">Rectal fluid logged</span>
+                <p className="text-xl font-semibold">{loggedInstilledMl > 0 ? formatMilliliters(loggedInstilledMl) : "--"}</p></div>
+            </div>
+            <p className="mt-3 text-sm text-muted-foreground">{procedureRecord ? "Mark observations during the recording." : "Start a capture to timestamp procedure observations."}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {quickEventPads.map(command => <button key={command.key} type="button" disabled={!procedureRecord}
+                onClick={() => recordQuickLiveEvent(command).catch(error => toast({ title: "Observation could not be saved", description: error.message, variant: "destructive" }))}
+                className="min-h-10 rounded-lg border border-border px-3 py-2 text-sm font-semibold disabled:opacity-40">{command.label}</button>)}
+            </div>
+            {procedureEvents.length > 0 && <details className="mt-3 text-sm">
+              <summary className="cursor-pointer">{procedureEvents.length} saved observations · view timeline</summary>
+              <ol className="mt-2 space-y-2">{procedureEvents.map((event, index) => (
+                <li key={event.id || index}><span className="font-mono text-primary">{fmtMmSs(event.time_s)}</span> {event.note || event.label}</li>
+              ))}</ol>
+            </details>}
+          </section>
+        ))}
 
         {telemetryPanelEnabled("phase") && !captureIsBodyExploration && (
           renderTelemetryDashboardPanel("phase", <div className="h-full overflow-hidden rounded-xl border border-border bg-muted/20 p-3" style={{ order: telemetryPanelOrder("phase") }}>
@@ -10081,8 +10191,8 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         {telemetryPanelEnabled("threshold") && directH10Source && (
           renderTelemetryDashboardPanel("threshold", <div className="h-full min-h-0">
             <TrendPanel
-              title="Threshold Load Matrix"
-              subtitle="Approach, sustained plateau, controller trust, recovery, and normalized Howl dose"
+              title={captureIsBodyExploration ? "Procedure Response Trend" : "Threshold Load Matrix"}
+              subtitle={captureIsBodyExploration ? "HR change from baseline (bpm) and measured RMSSD (ms)" : "Approach, sustained plateau, controller trust, recovery, and normalized Howl dose"}
               empty={!hasThresholdPhysiologyTrend}
               heightClass="h-80 md:h-[24rem]"
               distanceView={distanceTelemetryView}
@@ -10102,6 +10212,15 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
                   <XAxis dataKey="time" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={28} />
+                  {captureIsBodyExploration ? <>
+                    <YAxis yAxisId="hrDelta" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} width={36} />
+                    <YAxis yAxisId="rmssd" orientation="right" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} width={36} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <ReferenceLine yAxisId="hrDelta" y={0} stroke="#94a3b8" strokeDasharray="5 5" />
+                    <Line yAxisId="hrDelta" type="monotone" dataKey="hrDelta" name="HR change (bpm)" stroke="#fb7185" strokeWidth={2.5} dot={false} />
+                    <Line yAxisId="rmssd" type="monotone" dataKey="hrvRmssd" name="RMSSD (ms)" stroke="#22d3ee" strokeWidth={2} dot={false} />
+                  </> : <>
                   <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} width={36} />
                   <Tooltip content={<ChartTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -10112,6 +10231,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
                   <Line type="monotone" dataKey="controllerConfidence" name="Control trust" stroke="#22d3ee" strokeWidth={2} dot={false} connectNulls />
                   <Line type="monotone" dataKey="recovery" name="Recovery" stroke="#34d399" strokeWidth={1.75} dot={false} connectNulls />
                   <Line type="stepAfter" dataKey="howlDose" name="Howl dose %" stroke="#e879f9" strokeWidth={2} dot={false} connectNulls />
+                  </>}
                 </ComposedChart>
               </ResponsiveContainer>
             </TrendPanel></div>))}
@@ -10151,7 +10271,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
 
         <div className="contents">
         {telemetryPanelEnabled("cardiac") && renderTelemetryDashboardPanel("cardiac", <div className="h-full min-h-0" style={{ order: telemetryPanelOrder("cardiac") }}>
-        <TrendPanel title="Cardiac & Autonomic Trend" subtitle="Heart rate, smoothed baseline, RMSSD, SDNN, and session approach load" empty={!hasHrTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-72 md:h-80"} distanceView={distanceTelemetryView} fill={focusView}>
+        <TrendPanel title="Cardiac & Autonomic Trend" subtitle={captureIsBodyExploration ? "Heart rate, baseline, RMSSD and SDNN during procedure review" : "Heart rate, smoothed baseline, RMSSD, SDNN, and session approach load"} empty={!hasHrTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-72 md:h-80"} distanceView={distanceTelemetryView} fill={focusView}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={telemetryHistory} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.45} />

@@ -12,6 +12,9 @@ test("parses spoken enema instillation amounts in common units and word order", 
 test("does not turn unrelated volume mentions into instillation entries", () => {
   assert.equal(parseEnemaVolumeEntry("The bag contains 500 milliliters"), null);
   assert.equal(parseEnemaVolumeEntry("Blood glucose is 90 milligrams per deciliter"), null);
+  assert.equal(parseEnemaVolumeEntry("Instilled 10 milliliters into the Foley balloon"), null);
+  assert.equal(parseEnemaVolumeEntry("Bladder irrigation, added 30 milliliters"), null);
+  assert.equal(parseEnemaVolumeEntry("Rectal enema, another 60 cc instilled").amountMl, 60);
 });
 
 test("sums only structured instilled-volume events", () => {

@@ -1,5 +1,6 @@
 function numberOrNull(...values) {
   for (const value of values) {
+    if (value == null || value === "") continue;
     const n = Number(value);
     if (Number.isFinite(n)) return n;
   }
@@ -55,6 +56,8 @@ function estimateBuildDurationSec(history = [], fallbackSessionTimeSec = 0) {
   let lastBuildPoint = lastPoint;
   for (let index = points.length - 2; index >= 0; index -= 1) {
     const candidate = points[index];
+    const nextPoint = points[index + 1];
+    if (Number.isFinite(candidate.ts) && Number.isFinite(nextPoint.ts) && nextPoint.ts - candidate.ts > 60000) break;
     if (pointLooksLikeBuild(candidate)) {
       startPoint = candidate;
       lastBuildPoint = candidate;

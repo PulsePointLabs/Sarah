@@ -28,6 +28,7 @@ import { decideObsSessionLifecycleTransition } from '../services/liveCaptureSess
 import { cameraCaptureRouter } from './cameraCapture.js';
 
 import { createNativeH10Decoder } from '../services/nativeH10Telemetry.js';
+import { deriveLiveHrTelemetry } from '../../src/lib/liveHrDerivation.js';
 import { LiveMonitoring } from '../services/liveMonitoring.js';
 
 export const liveCaptureRouter = express.Router();
@@ -158,11 +159,12 @@ export function setMonitoringCivetProvider(provider) { monitoringCivet = provide
 const liveMonitoring = new LiveMonitoring({ onCandidate(event) {
   const session = currentLiveSessionEntity();
   if (!session || session.id !== liveMonitoring.sessionId) throw new Error('Monitoring session changed before candidate save.');
+  if (state.session.captureKind === 'body_exploration' || state.session.entity === 'BodyExploration') return;
   const events = session.event_timeline || [];
   if (!events.some(existing => existing.id === event.id)) patchCurrentLiveSession({ event_timeline: [...events, event].sort((a, b) => a.time_s - b.time_s) });
 } });
 function monitoringState() {
-  const snapshot = liveMonitoring.snapshot(Date.now(), { active: Boolean(state.session.active && state.hr.recording?.active), paused: Boolean(state.hr.recording?.paused) });
+  const snapshot = liveMonitoring.snapshot(Date.now(), { active: true, paused: Boolean(state.session.active && state.hr.recording?.paused) });
   return state.monitoring?.error ? { ...snapshot, stale: true, error: state.monitoring.error } : snapshot;
 }
 telemetryEngine.on('snapshot', (snapshot) => {
@@ -173,11 +175,12 @@ telemetryEngine.on('snapshot', (snapshot) => {
   if (snapshot.hr) state.hr.latestTelemetry = snapshot.hr;
   if (snapshot.emg) state.emg.latestTelemetry = snapshot.emg;
   try {
-    const changed = state.session.activeSessionId !== liveMonitoring.sessionId;
+    const sessionId = state.session.active && state.hr.recording?.active ? state.session.activeSessionId : null;
+    const changed = sessionId !== liveMonitoring.sessionId;
     state.monitoring = liveMonitoring.update({ hr: snapshot.hr, emg: snapshot.emg, civet: monitoringCivet(),
-      sessionId: state.session.activeSessionId, startedAt: state.session.startedAt,
-      active: Boolean(state.session.active && state.hr.recording?.active), paused: Boolean(state.hr.recording?.paused),
-      candidateCount: changed ? (currentLiveSessionEntity()?.event_timeline || []).filter(event => event.source === 'live_climax_prediction').length : 0,
+      sessionId, startedAt: sessionId ? state.session.startedAt : null,
+      active: true, paused: Boolean(state.session.active && state.hr.recording?.paused),
+      candidateCount: changed && sessionId ? (currentLiveSessionEntity()?.event_timeline || []).filter(event => event.source === 'live_climax_prediction').length : 0,
     });
   } catch (error) { state.monitoring = { ...monitoringState(), stale: true, error: error.message }; }
   snapshot.monitoring = state.monitoring;
@@ -247,13 +250,6 @@ function entityForCaptureKind(captureKind) {
   return normalizeCaptureKind(captureKind) === 'body_exploration' ? 'BodyExploration' : 'Session';
 }
 
-function median(values = []) {
-  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
-  if (!sorted.length) return null;
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
 function fmtLocalCaptureTimestamp(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return '';
@@ -270,122 +266,8 @@ function fmtLocalCaptureTimestamp(value) {
   });
 }
 
-function hrvQualityScore(value) {
-  const quality = String(value || '').trim().toLowerCase();
-  if (quality === 'high') return 3;
-  if (quality === 'moderate') return 2;
-  if (quality === 'low') return 1;
-  return 0;
-}
-
-function readTelemetryRmssd(telemetry = {}) {
-  const direct = cleanNumber(telemetry?.hrv?.rmssdMs);
-  if (direct != null) return direct;
-  return cleanNumber(telemetry?.hrv_rmssd_ms);
-}
-
 function enrichHrTelemetry(telemetry) {
-  const hr = cleanHr(telemetry?.heartRate || telemetry?.currentHr || telemetry?.hr);
-  if (hr == null) return telemetry;
-  const source = telemetry?.source || state.hr.selectedSource || 'unknown';
-  const now = Number(telemetry?.receivedAt) || Date.now();
-  const hrv = telemetry?.hrv || {};
-  const rmssd = readTelemetryRmssd(telemetry);
-  const rrCount = cleanNumber(telemetry?.quality?.rrCount) ?? cleanNumber(hrv.sampleCount) ?? 0;
-  const hrvQuality = hrv.quality || telemetry?.hrv_quality || telemetry?.quality?.hrvQuality || null;
-  const rows = (derivedHrState.get(source) || [])
-    .filter((row) => now - row.t <= 4 * 60 * 60 * 1000);
-  const nextRow = { t: now, hr, rmssd };
-  const previousRow = rows[rows.length - 1];
-  // Direct H10 packets arrive several times per second. Keep a time-based history,
-  // not a packet-count history, or a 240-point "8 minute" baseline is really only
-  // about one minute and quickly chases a sustained build upward.
-  if (previousRow && now - previousRow.t < 900) rows[rows.length - 1] = nextRow;
-  else rows.push(nextRow);
-  const trimmed = rows.slice(-14400);
-  derivedHrState.set(source, trimmed);
-
-  const recent = trimmed.slice(-30).map((row) => row.hr);
-  const baselinePool = trimmed.length >= 20 ? trimmed.map((row) => row.hr) : recent;
-  const lowBand = [...baselinePool].sort((a, b) => a - b).slice(0, Math.max(5, Math.ceil(baselinePool.length * 0.35)));
-  const baselineHr = Math.round(median(lowBand) || hr);
-  const smoothedHr = Math.round(median(recent.slice(-5)) || hr);
-  const elevatedDelta = Math.max(0, smoothedHr - baselineHr);
-  const firstRecent = trimmed[Math.max(0, trimmed.length - 12)];
-  const slopeBpm30s = firstRecent && firstRecent.t !== now
-    ? ((smoothedHr - firstRecent.hr) / ((now - firstRecent.t) / 1000)) * 30
-    : 0;
-  const recentPeak = Math.max(...trimmed.slice(-45).map((row) => row.hr));
-  const dropFromPeak = Math.max(0, recentPeak - smoothedHr);
-  const recentRmssd = trimmed.slice(-45).map((row) => cleanNumber(row.rmssd)).filter((value) => value != null);
-  const baselineRmssd = trimmed.slice(-120).map((row) => cleanNumber(row.rmssd)).filter((value) => value != null);
-  const baselineRmssdMedian = median(baselineRmssd);
-  const recentRmssdMedian = median(recentRmssd);
-  const referenceRmssd = baselineRmssdMedian ?? recentRmssdMedian ?? rmssd;
-  const hrvUsable = hrvQualityScore(hrvQuality) >= 2 || rrCount >= 40;
-  const firstRecentRmssd = recentRmssd.length ? recentRmssd[0] : null;
-  const rmssdTrend = rmssd != null && firstRecentRmssd != null ? rmssd - firstRecentRmssd : 0;
-  const hrvCompressed = hrvUsable && rmssd != null && (
-    ((referenceRmssd ?? 0) >= 8 && rmssd <= referenceRmssd * 0.72 && elevatedDelta >= 8)
-    || (rmssd <= 6 && elevatedDelta >= 10)
-  );
-  const hrvTightening = hrvUsable && rmssd != null && rmssdTrend <= -3 && elevatedDelta >= 8 && slopeBpm30s >= 0.6;
-  const hrvOpening = hrvUsable && rmssd != null && (referenceRmssd ?? 0) >= 5 && rmssd >= referenceRmssd * 1.55;
-  const hrvRecoveryBias = hrvOpening && dropFromPeak >= 4 && slopeBpm30s <= 0.5;
-  const recentHrLiftCount = trimmed.slice(-12).filter((row) => row.hr >= baselineHr + 8).length;
-  const persistentHrLift = trimmed.slice(-12).filter((row) => row.hr >= baselineHr + 10).length >= 3;
-  const persistentSlopeRise = slopeBpm30s >= 2 && elevatedDelta >= 8 && recentHrLiftCount >= 3;
-  const buildCandidate = elevatedDelta >= 12
-    || persistentSlopeRise
-    || ((hrvCompressed || hrvTightening) && elevatedDelta >= 8);
-
-  const phase = (dropFromPeak >= 8 && elevatedDelta <= 12 && (slopeBpm30s <= 0.5 || hrvRecoveryBias))
-    ? 'recovery'
-    : (buildCandidate && (persistentHrLift || persistentSlopeRise || ((hrvCompressed || hrvTightening) && recentHrLiftCount >= 2)))
-      ? 'build'
-      : 'baseline';
-
-  let buildConfidence = elevatedDelta * 7 + Math.max(0, slopeBpm30s) * 4;
-  if (hrvCompressed) buildConfidence += 12;
-  else if (hrvTightening) buildConfidence += 8;
-  else if (hrvRecoveryBias) buildConfidence -= 8;
-  if (phase === 'recovery') {
-    buildConfidence -= dropFromPeak * 2;
-    if (hrvRecoveryBias) buildConfidence -= 8;
-  } else if (phase !== 'build' && elevatedDelta < 10) {
-    buildConfidence = Math.min(buildConfidence, 42);
-  } else if (!persistentHrLift && !persistentSlopeRise && elevatedDelta < 12) {
-    buildConfidence = Math.min(buildConfidence, 55);
-  }
-  buildConfidence = Math.round(Math.max(0, Math.min(100, buildConfidence)));
-
-  const hrvSignal = !hrvUsable || rmssd == null
-    ? 'waiting'
-    : hrvCompressed
-      ? 'compressed'
-      : hrvRecoveryBias
-        ? 'release'
-        : hrvTightening
-          ? 'tightening'
-          : hrvOpening
-            ? 'opening'
-            : 'steady';
-
-  return {
-    ...telemetry,
-    currentHr: hr,
-    heartRate: hr,
-    hr,
-    smoothedHr,
-    hrSmoothed: smoothedHr,
-    baselineHr,
-    elevatedDelta,
-    phase,
-    buildConfidence,
-    hrvUsable,
-    hrvSignal,
-    hrvReferenceRmssd: referenceRmssd != null ? Number(referenceRmssd.toFixed(1)) : null,
-  };
+  return deriveLiveHrTelemetry(telemetry, derivedHrState, state.hr.selectedSource);
 }
 
 function markSelectedHrStaleIfNeeded() {

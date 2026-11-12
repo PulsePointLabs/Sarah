@@ -1,6 +1,20 @@
 // This connection is display-only. Closing it never stops native acquisition.
 export const ownsMonitoringHistory = monitor => monitor?.version === 1 && (monitor.active === true || monitor.paused === true);
 
+export function canUseServerPrediction(monitor, hr, now = Date.now()) {
+  if (!ownsMonitoringHistory(monitor) || monitor.paused || monitor.stale || monitor.error || !monitor.prediction) return false;
+  const at = Number(monitor.latestAt);
+  const sensorAt = freshTelemetryTimestamp(hr, null, now);
+  return at > 0 && now - at <= 5000 && at <= now + 5000 && sensorAt != null && Math.abs(sensorAt - at) <= 5000;
+}
+
+export function preferLiveHrTelemetry(incoming, current, now = Date.now()) {
+  const currentAt = freshTelemetryTimestamp(current, null, now);
+  if (currentAt == null || incoming && incoming.source !== current?.source) return incoming;
+  const incomingAt = freshTelemetryTimestamp(incoming, null, now);
+  return incomingAt == null || incomingAt < currentAt ? current : incoming;
+}
+
 export function freshTelemetryTimestamp(hr, emg, now = Date.now()) {
   const value = hr?.measuredAt || hr?.receivedAt || emg?.source_at || emg?.receivedAt;
   const at = Number(value) || Date.parse(value || '');

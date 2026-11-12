@@ -8,6 +8,21 @@ obsRecordingRouter.use((_req, res, next) => {
   next();
 });
 obsRecordingRouter.get('/', (_req, res) => res.json(getObsRecordingCoordinator().snapshot()));
+obsRecordingRouter.put('/primary', (req, res) => {
+  try {
+    const primary = getObsRecordingCoordinator().primary;
+    if (!primary.saveConnection) return res.status(503).json({ error: 'Primary OBS configuration is unavailable.' });
+    res.json(primary.saveConnection(req.body || {}));
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+obsRecordingRouter.post('/primary/test', async (_req, res) => {
+  try {
+    const controller = getObsRecordingCoordinator();
+    if (!controller.primary.status().identified) throw new Error(controller.primary.status().error || 'Primary OBS has not completed its connection yet.');
+    await controller.primary.request('GetRecordStatus');
+    res.json(controller.snapshot());
+  } catch (error) { res.status(409).json({ error: error.message }); }
+});
 obsRecordingRouter.put('/', (req, res) => {
   try { res.json(getObsRecordingCoordinator().save(req.body || {})); }
   catch (error) { res.status(400).json({ error: error.message }); }

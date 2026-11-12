@@ -42,5 +42,16 @@ test('production snapshot handler persists detection before any client connects'
     assert.equal(state.monitoring.latestAt, now);
     assert.equal(getSession().event_timeline[0].prediction.evidence_status, 'physiology_only');
     assert.equal(state.monitoring.stale, false);
+    state.session.active = false;
+    state.hr.recording.active = false;
+    for (let second = 31; second <= 42; second++) {
+      now = start + second * 1000;
+      engine.emit('snapshot', { hr: { measuredAt: now, heartRate: 112 } });
+    }
+    assert.equal(state.monitoring.active, true);
+    assert.equal(state.monitoring.mode, 'passive');
+    assert.equal(state.monitoring.stale, false);
+    assert.equal(state.monitoring.prediction.nearClimax, 75);
+    assert.equal(getSession().event_timeline.length, 1, 'passive observation does not write to the previous session');
   } finally { db.close(); }
 });

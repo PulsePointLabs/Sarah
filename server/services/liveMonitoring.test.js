@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { LiveMonitoring } from './liveMonitoring.js';
 import { createNativeH10Decoder } from './nativeH10Telemetry.js';
 import { computeLiveClimaxPrediction } from '../../src/utils/liveClimaxPrediction.js';
+import { deriveLiveHrTelemetry } from '../../src/lib/liveHrDerivation.js';
 
 const start = 1790000000000;
 const high = { nearClimax: 75, buildEligibleForNearClimax: true, confirmationCount: 3,
@@ -77,4 +78,29 @@ test('real native HR/RR pipeline keeps HRV and predictions updating for ten minu
     { heartRate: 119, baselineHr: 70, buildConfidence: 65, phase: 'build' }, null, monitor.history,
     { sessionTimeSec: 599 }).buildDurationSec);
   assert.equal(monitor.snapshot(start + 599000).stale, false);
+});
+
+test('passive H10 monitoring builds a real score and elapsed context without a recording or saved session', () => {
+  const events = [];
+  const monitor = new LiveMonitoring({ onCandidate: event => events.push(event) });
+  const derived = new Map();
+  for (let second = 0; second < 240; second++) {
+    const hr = deriveLiveHrTelemetry({
+      source: 'direct_h10', receivedAt: start + second * 1000,
+      heartRate: second < 60 ? 80 : Math.min(126, 80 + (second - 60) * 0.5),
+      hrv: { rmssdMs: second < 80 ? 24 : 4, quality: 'high', sampleCount: 180 },
+    }, derived);
+    monitor.update({ sessionId: null, active: true, hr }, start + second * 1000);
+  }
+  const snapshot = monitor.snapshot(start + 239000);
+  assert.equal(snapshot.mode, 'passive');
+  assert.equal(snapshot.stale, false);
+  assert.equal(monitor.history.at(-1).sessionTimeSec, 239);
+  assert.ok(snapshot.prediction.nearClimax >= 60);
+  assert.ok(snapshot.prediction.buildDurationSec >= 90);
+  assert.equal(events.length, 0, 'passive monitoring creates no saved session events');
+  monitor.update({ sessionId: null, active: true,
+    hr: { measuredAt: start + 320000, heartRate: 82 } }, start + 320000);
+  assert.equal(monitor.history.length, 1);
+  assert.equal(monitor.history[0].sessionTimeSec, 0);
 });

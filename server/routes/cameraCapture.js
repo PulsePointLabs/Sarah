@@ -1,6 +1,7 @@
 import express from 'express';
 import { db, getEntity, upsertEntity } from '../db.js';
 import { saveCameraCaptureBloodPressure } from './bloodPressure.js';
+import { sumEnemaInstilledVolume } from '../../src/lib/enemaVolume.js';
 
 export const cameraCaptureRouter = express.Router();
 
@@ -16,6 +17,7 @@ cameraCaptureRouter.post('/', (req, res) => {
   const entity = captureKind === 'body_exploration' ? 'BodyExploration' : 'Session';
   const body = req.body;
   const rows = key => Array.isArray(body[key]) ? body[key] : [];
+  const instilledMl = sumEnemaInstilledVolume(rows('annotations'));
   try {
     const session = db.transaction(() => {
       const existing = getEntity(entity, id);
@@ -47,6 +49,10 @@ cameraCaptureRouter.post('/', (req, res) => {
         emg_timeline: rows('emg_timeline'),
         pulse_ox_readings: rows('spo2_timeline'),
         event_timeline: rows('annotations'),
+        ...(instilledMl > 0 ? {
+          enema_instilled_total_ml: instilledMl,
+          enema_instillation_count: rows('annotations').filter(event => Number(event.procedure_measurement?.amount_ml ?? event.instilled_volume_ml) > 0).length,
+        } : {}),
       });
       return saveCameraCaptureBloodPressure(initial, rows('blood_pressure_snapshots'), entity);
     })();

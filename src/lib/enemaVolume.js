@@ -43,6 +43,8 @@ function numericAmount(value = "") {
 export function parseEnemaVolumeEntry(text = "") {
   const normalized = String(text).toLowerCase().replace(/[–—]/g, "-").replace(/\s+/g, " ").trim();
   if (!normalized) return null;
+  const urinaryContext = /\b(foley|bladder|urine|urinary|balloon|urethra|urethral|irrigation)\b/.test(normalized);
+  if (urinaryContext && !/\b(enema|rectal|rectum)\b/.test(normalized)) return null;
   const actionPresent = /\b(instill(?:ed|ing|ation)?|infus(?:ed|ing|ion)?|put in|added|add|went in|fluid in|another)\b/.test(normalized);
   if (!actionPresent) return null;
 
