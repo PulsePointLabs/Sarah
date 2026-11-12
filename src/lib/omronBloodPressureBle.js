@@ -102,6 +102,7 @@ async function startNativeOmronListener({ onStatus, onReading, onHeldReading, on
       onStatus?.(summarizeOmronConnection(state), state);
       const pending = Array.isArray(state?.pendingReadings) ? state.pendingReadings : [state?.pendingReading].filter(Boolean);
       pending.forEach(deliverReading);
+      (state?.heldReadings || []).forEach(deliverReading);
       // A native upload may finish while this WebView is paused or destroyed.
       // Rehydrate its confirmed reading; server and page dedupe by external ID.
       if (state?.lastDeliveredReading?.external_id) deliverReading(state.lastDeliveredReading);

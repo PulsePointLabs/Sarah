@@ -19,7 +19,6 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import com.getcapacitor.JSObject
 import org.json.JSONArray
@@ -149,7 +148,9 @@ object OmronCollector {
         for (index in 0 until queue.length()) {
             val reading = queue.getJSONObject(index)
             val id = reading.optString("external_id")
-            if (id.isBlank() || runCatching { java.time.Instant.parse(reading.optString("measured_at")) }.isFailure) continue
+            // Older releases persisted malformed cuff dates. Preserve those packets
+            // for recovery, but do not repeatedly POST them or block newer readings.
+            if (id.isBlank() || !OmronDeliveryTime.isUsable(reading.optString("measured_at"))) continue
             val connection = java.net.URL(destination).openConnection() as java.net.HttpURLConnection
             var httpStatus = 0
             try {
@@ -181,7 +182,7 @@ object OmronCollector {
                     else "save_not_confirmed"
                 diagnostic("delivery_$deliveryError")
                 handler.post { notifyListeners("status", state()) }
-                return
+                if (httpStatus !in 400..499) return
             } finally { connection.disconnect() }
         }
     }
@@ -197,7 +198,9 @@ object OmronCollector {
         scanning = true
         notifyListeners("status", stateObject("scanning").put("message", "Waiting for the saved OMRON cuff to wake..."))
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-        val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(BP_SERVICE)).build()
+        // A saved cuff need not advertise its service UUID in every wake packet.
+        // Service discovery still verifies BP support after connecting.
+        val filter = ScanFilter.Builder().setDeviceAddress(targetAddress!!).build()
         try { scanner.startScan(listOf(filter), settings, scanCallback) }
         catch (error: Exception) {
             scanning = false
@@ -340,6 +343,8 @@ object OmronCollector {
 
     private fun diagnostic(event: String, status: Int? = null) {
         synchronized(connectionDiagnostics) {
+            if (connectionDiagnostics.lastOrNull()?.optString("event") == event &&
+                connectionDiagnostics.lastOrNull()?.optInt("status", -1) == (status ?: -1)) return
             connectionDiagnostics.add(JSObject().put("at", java.time.Instant.now().toString()).put("event", event).put("status", status))
             while (connectionDiagnostics.size > 20) connectionDiagnostics.removeFirst()
             prefs.edit().putString("connection_diagnostics", JSONArray(connectionDiagnostics.toList()).toString()).apply()
@@ -419,8 +424,16 @@ object OmronCollector {
         return queue
     }
 
-    private fun pendingReading(): JSObject? = pendingReadings().let {
-        if (it.length() > 0) JSObject(it.getJSONObject(0).toString()) else null
+    private fun deliveryReadings(usable: Boolean): JSONArray = JSONArray().also { result ->
+        val queue = pendingReadings()
+        for (index in 0 until queue.length()) {
+            val reading = queue.getJSONObject(index)
+            if (OmronDeliveryTime.isUsable(reading.optString("measured_at")) == usable) result.put(reading)
+        }
+    }
+
+    private fun pendingReading(): JSObject? = deliveryReadings(true).let {
+        if (it.length() > 0) JSObject(it.getJSONObject(it.length() - 1).toString()) else null
     }
 
     private fun stateObject(state: String) = JSObject()
@@ -431,10 +444,11 @@ object OmronCollector {
         .put("diagnostics", synchronized(connectionDiagnostics) { JSONArray(connectionDiagnostics.toList()) })
         .put("deviceId", targetAddress ?: "")
         .put("deviceName", targetName)
-        .put("deliveryError", deliveryError)
+        .put("deliveryError", if (deliveryReadings(true).length() > 0) deliveryError else "")
         .put("backgroundDelivery", true)
         .put("pendingReading", pendingReading())
-        .put("pendingReadings", pendingReadings())
+        .put("pendingReadings", deliveryReadings(true))
+        .put("heldReadings", deliveryReadings(false))
         .put("lastDeliveredReading", runCatching { JSObject(prefs.getString("last_delivered_reading", "{}")) }.getOrNull())
 
     private fun emitError(message: String) {

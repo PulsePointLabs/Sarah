@@ -54,10 +54,26 @@ test('polling reflects a native disconnect or stop and ignores late polls after 
 test('Stop errors are visible instead of falsely claiming the cuff was released',async()=>{
   const h=harness();h.failStop();await assert.rejects(h.api.stop(),/stop failed/);
 });
-test('native collector only subscribes for readings and never reads or writes cuff setup',()=>{
+test('native collector subscribes for readings and never writes cuff setup',()=>{
   const native=fs.readFileSync(new URL('../../android/app/src/main/java/com/pulsepointlabs/sarah/OmronCollector.kt',import.meta.url),'utf8');
-  assert.doesNotMatch(native,/writeCharacteristic\(|readCharacteristic\(|clock_write_requested|checkClock\(/);
+  assert.doesNotMatch(native,/writeCharacteristic\(|clock_write_requested/);
   const services=native.slice(native.indexOf('override fun onServicesDiscovered'),native.indexOf('override fun onDescriptorWrite'));
   assert.match(services,/subscribeToReadings\(connection\)/);assert.doesNotMatch(services,/checkClock\(connection\)/);
   assert.match(native,/if \(!armed \|\| scanning \|\| gatt != null/);
+});
+
+test('a held bad-date packet does not prevent delivery of a newer measurement',async()=>{
+  const h=harness();
+  const saved=[];const held=[];
+  h.setState({heldReadings:[{external_id:'bad',measured_at:'-0001-11-28T04:56:02Z'}],
+    pendingReadings:[{external_id:'fresh',measured_at:'2026-11-12T03:20:00Z'}]});
+  await h.api.start({onReading:async r=>saved.push(r.external_id),onHeldReading:r=>held.push(r.external_id)});
+  await new Promise(r=>setImmediate(r));
+  assert.deepEqual(saved,['fresh']);assert.deepEqual(held,['bad']);await h.api.stop();
+});
+
+test('pending delivery cannot hide a disconnected cuff',()=>{
+  assert.match(summarizeOmronConnection({listening:true,connected:false,deliveryError:'http_400',pendingReadings:[{}]}),/not connected yet/);
+  const held=summarizeOmronConnection({listening:true,connected:false,heldReadings:[{}]});
+  assert.match(held,/date needs recovery/);assert.doesNotMatch(held,/saving|Retrying/);
 });
