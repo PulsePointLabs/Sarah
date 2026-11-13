@@ -1698,7 +1698,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const [nearClimaxEpisodeCount, setNearClimaxEpisodeCount] = useState(0);
   const [hrSourceSettings, setHrSourceSettings] = useState(() => {
     const settings=readHrSourceSettings();
-    if(isPhoneAcquisition()){settings.source='direct_h10';writeHrSourceSettings(settings);}
+    if(isPhoneAcquisition())settings.source='direct_h10';
     return settings;
   });
   const [hrSourceSaving, setHrSourceSaving] = useState(false);
@@ -2528,8 +2528,8 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     const resolvedSettings = settings || readHrSourceSettings();
     setHrSourceSaving(true);
     setHrSourceError("");
-    writeHrSourceSettings(resolvedSettings);
     if(isPhoneAcquisition()){setHrSourceSaving(false);return;}
+    writeHrSourceSettings(resolvedSettings);
     try {
       const response = await fetch(apiUrl("/live-capture/hr-source"), {
         method: "POST",
@@ -3689,7 +3689,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   }, [disconnectDirectH10]);
 
   useEffect(() => {
-    const settings = readHrSourceSettings();
+    const settings = {...readHrSourceSettings(),...(isPhoneAcquisition()?{source:'direct_h10'}:{})};
     setHrSourceSettings(settings);
     applyHrSourceSettings(settings);
   }, [applyHrSourceSettings]);

@@ -45,6 +45,10 @@ export default function CivetSetup({ live, onClose }) {
   const rows = connected ? (live.history || []).filter(r => r.t >= end - 10 && r.t <= end) : [];
   return createPortal(<div className="civet-setup-backdrop"><section role="dialog" aria-modal="true" aria-label="Connect CIVET" className="civet-setup">
     <header><h2>CIVET pressure setup</h2><button onClick={onClose}>Close</button></header>
+    {!phone && <div className="civet-connection-controls" aria-label="CIVET acquisition source">
+      <button disabled={busy||active} onClick={()=>action('source',{source:'server'})}>Use server Bluetooth</button>
+      <button disabled={busy||active} onClick={()=>action('source',{source:'phone'})}>Use phone stream</button>
+    </div>}
     <div className="civet-connection"><strong>{connected ? 'Receiving live pressure' : live.connected ? 'Bluetooth connected · waiting for pressure' : live.state === 'connecting' ? 'Connecting to sensor…' : live.state === 'stale' ? 'Pressure signal interrupted' : 'No live pressure connection'}{live.battery != null ? ` · ${live.battery}% battery` : ''}</strong>
       <span>{phone ? 'Source: this phone’s Bluetooth · no server required' : live.acquisition==='phone' ? 'Source: Sarah phone · server receives copies' : 'Source: server computer’s Bluetooth'}</span>
       <span>{phone ? live.localRecording ? 'Raw pressure is retained in private phone storage.' : 'Local acquisition stopped.' : live.recordingId ? 'Recording to session' : 'Start a Sarah session to record'}</span></div>

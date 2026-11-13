@@ -30,6 +30,7 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
   const deviceMetadataFile=path.join(directory,'device','zero-events.jsonl');
   if(fs.existsSync(deviceMetadataFile)){const lines=fs.readFileSync(deviceMetadataFile,'utf8').trim().split('\n').filter(Boolean);try{lastHardwareZero=JSON.parse(lines.at(-1));}catch{lastHardwareZero=null;}}
   let state={state:'disconnected',error:null,battery:null,address:null};
+  let acceptPhone=true;
   const safe=id=>{if(!/^[a-zA-Z0-9_-]{1,150}$/.test(id)) throw new Error('Invalid session id'); return path.join(directory,`${id}.jsonl`);};
   process.once('exit',()=>child?.kill());
   const status=()=>({...state,busy,remembered,autoReconnectPaused:paused,latest:lastAt && Date.now()-lastAt<1500 ? latest : null,history,age_ms:lastAt?Date.now()-lastAt:null,recordingId,monitorSummary});
@@ -112,7 +113,16 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
   }
   const service={
     status, ingest,
+    source({source}) {
+      if(!['phone','server'].includes(source))throw new Error('Choose phone or server acquisition.');
+      rejectCommands();const previous=child;child=null;previous?.kill();
+      acceptPhone=source==='phone';paused=true;latest=null;history=[];lastAt=0;
+      processor=createCivetProcessor();captureId=randomUUID();previousConnection=null;
+      state={state:acceptPhone?'waiting_for_phone':'disconnected',acquisition:source,error:null,battery:null,address:source==='server'?remembered?.address||null:null};
+      return status();
+    },
     ingestPhone(reading) {
+      if(!acceptPhone)return;
       if(child){const previous=child;child=null;rejectCommands();previous.kill();processor=createCivetProcessor();history=[];latest=null;lastAt=0;}
       paused=true;
       state.acquisition='phone';
@@ -147,7 +157,8 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
       if(!validAddress(address)) throw new Error('Choose a discovered CIVET.');
       if(!fs.existsSync(python)) throw new Error('Install the CIVET helper first.');
       paused=false;rememberAllowed=true;captureId=randomUUID();previousConnection=null;processor=createCivetProcessor();summarizeMonitor=createCivetMonitorSummary();monitorSummary=null;latest=null;history=[];lastAt=0;
-      state={state:'connecting',address,error:null,battery:null};
+      acceptPhone=false;
+      state={state:'connecting',address,error:null,battery:null,acquisition:'server'};
       const process=launch(python,['-u',helper,'connect',address],{windowsHide:true,stdio:['pipe','pipe','pipe']});child=process;
       let buffer='';
       process.stdout.on('data',chunk=>{if(child!==process)return;buffer+=chunk.toString();let end;while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);try{const message=JSON.parse(line);if(message.command_id) {commandReply(message);}else if(Number.isFinite(message.pressure_kpa)) ingest(message);else {if(message.state&&message.state!==state.state)appendMetadata({type:'sensor_connection',state:message.state,timestamp_ms:message.timestamp_ms??Date.now()});state={...state,...message};if(message.state==='connected'){state.error=null;if(rememberAllowed&&(!remembered||remembered.address!==address))saveConnection({address,autoReconnect:true});}if(message.state==='reconnecting'){latest=null;reconnected=true;processor.invalidate();}}}catch(error){state.error=`CIVET packet error: ${error.message}`;}}});

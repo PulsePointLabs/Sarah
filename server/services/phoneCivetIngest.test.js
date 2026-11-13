@@ -38,3 +38,16 @@ test('server backfill never presents an old phone sample as live pressure',()=>{
     assert.equal(service.status().acquisition,'phone');
   }finally{assert.equal(path.dirname(directory),os.tmpdir());fs.rmSync(directory,{recursive:true,force:true});}
 });
+test('explicit server acquisition is preserved while phone copies remain archived',()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'phone-civet-'));
+  try {
+    const service=createCivetService({directory});
+    service.source({source:'server'});
+    service.ingestPhone({...reading(),timestamp_ms:Date.now()});
+    assert.equal(service.status().acquisition,'server');assert.equal(service.status().latest,null);
+    service.source({source:'phone'});
+    service.ingestPhone({...reading(2),timestamp_ms:Date.now()});
+    assert.equal(service.status().latest.pressure_kpa,2.5);
+    assert.equal(service.status().acquisition,'phone');
+  }finally{assert.equal(path.dirname(directory),os.tmpdir());fs.rmSync(directory,{recursive:true,force:true});}
+});
