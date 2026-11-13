@@ -120,21 +120,25 @@ object CivetCollector {
     }
     fun connect(id: String, callback: (CallbackResponse)->Unit) {handler.post {
         if(!android.bluetooth.BluetoothAdapter.checkBluetoothAddress(id)) {callback(CallbackResponse(false,"Choose a CIVET sensor first."));return@post}
+        if(connecting&&address==id){callback(CallbackResponse(true,"Reconnecting"));return@post}
+        connecting=false
         address=id;enabled=true
         try {SarahCaptureService.start(app)} catch(e: RuntimeException) {enabled=false;callback(CallbackResponse(false,"Bring Sarah to the foreground and try again."));return@post}
         app.getSharedPreferences("civet_collector",0).edit().putString("address",id).putBoolean("enabled",true).apply()
-        open(callback)
+        open(null)
+        callback(CallbackResponse(true,"Listener enabled; waiting for pressure"))
     }}
     private fun open(callback: ((CallbackResponse)->Unit)?) {
         if(connecting)return
         val token=++generation
-        connecting=true;state="connecting";error="";lastPacket=0
+        connecting=true;state="connecting";lastPacket=0
+        handler.postDelayed({if(token==generation&&connecting)fail("CIVET did not start pressure. Check power and Bluetooth discoverable mode.",null)},30000)
         val previous=device;device=null
         fun begin() {handler.post {
             if(!enabled||token!=generation) {connecting=false;return@post}
             try {
                 val adapter=(app.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-                val current=Device(app,adapter,address) {handler.post {if(token==generation){state="reconnecting";lastPacket=0}}}
+                val current=Device(app,adapter,address) {handler.post {if(token==generation){connecting=false;state="reconnecting";lastPacket=0;error="CIVET disconnected. Check power and Bluetooth discoverable mode."}}}
                 device=current
                 current.connect(15000,false) { result -> handler.post {
                     if(token!=generation)return@post
