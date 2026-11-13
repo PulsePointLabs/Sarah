@@ -1,6 +1,8 @@
 # Phone acquisition and bedside monitoring
 
-The Android APK opens the local monitor before server login. No OBS recording,
+The Android APK opens the full Sarah app with its normal navigation. The local
+monitor is available inside Live Capture, and **Open Phone Capture** remains an
+explicit fallback on the connection/login screen. No OBS recording,
 Sarah server, or active session is required to acquire and display these sensors:
 
 | Sensor | Phone acquisition | Local data |

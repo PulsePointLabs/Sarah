@@ -7690,7 +7690,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         <div className="flex flex-wrap items-center gap-2 md:mt-1">
           {phoneOnly && <button type="button" onClick={onExitPhoneCapture} disabled={phoneCaptureBusy}
             className="rounded-lg border border-border px-3 py-2 text-sm font-semibold disabled:opacity-50">
-            Open server workspace
+            Return to Sarah
           </button>}
           {(!phoneOnly || captureTab === "telemetry") &&
           <button

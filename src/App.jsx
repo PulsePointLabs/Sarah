@@ -55,7 +55,7 @@ const AuthenticatedApp = () => {
     navigateToLogin,
   } = useAuth();
   const bootScreenVisibleRef = useRef(null);
-  const [offlineCapture, setOfflineCapture] = useState(() => Capacitor.getPlatform()==='android' && location.pathname!=='/chat');
+  const [offlineCapture, setOfflineCapture] = useState(false);
   const openOfflineCapture = Capacitor.getPlatform() === 'android' && location.pathname !== '/chat'
     ? <button type="button" onClick={() => setOfflineCapture(true)}
         className="mt-4 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">
