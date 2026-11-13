@@ -13,7 +13,7 @@ export function createPhoneCivetControl(db, { now = Date.now, timeoutMs = 10000 
     if (typeof captureId !== 'string' || !/^[\w-]{8,160}$/.test(captureId)) throw Error('Invalid phone capture.');
     heartbeat = { captureId, at: now() };
     db.prepare('DELETE FROM phone_civet_commands WHERE expires < ?').run(now() - 60000);
-    return { commands: db.prepare('SELECT id, body FROM phone_civet_commands WHERE capture_id=? AND expires>? AND result IS NULL ORDER BY rowid').all(captureId, now()).map(row => ({ id: row.id, ...JSON.parse(row.body) })) };
+    return { commands: db.prepare('SELECT id, body, expires FROM phone_civet_commands WHERE capture_id=? AND expires>? AND result IS NULL ORDER BY rowid').all(captureId, now()).map(row => ({ id: row.id, expires: row.expires, ...JSON.parse(row.body) })) };
   }
   function request(captureId, action, body) {
     if (!heartbeat || heartbeat.captureId !== captureId || now() - heartbeat.at > 5000) throw Error('Phone control is offline. Open the updated Sarah APK on your phone; pressure acquisition can continue independently.');

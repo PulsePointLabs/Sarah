@@ -104,7 +104,7 @@ object CivetCollector {
         val commands=exchange(base+"?capture_id="+captureId).getJSONArray("commands")
         val prefs=app.getSharedPreferences("civet_collector",0)
         for(i in 0 until commands.length()) {
-            val command=commands.getJSONObject(i);val id=command.getString("id")
+            val command=commands.getJSONObject(i);val id=command.getString("id");val expires=command.getLong("expires")
             val key="control_$id"
             var result=prefs.getString(key,null)
             if(result==null) {
@@ -115,9 +115,9 @@ object CivetCollector {
                     "calibrate" -> {
                         val kind=body.optString("kind");val prepare=body.optDouble("prepare_s",0.0)
                         if(kind !in listOf("baseline","reference")||!prepare.isFinite()||prepare<0||prepare>10){failure="Invalid calibration request";done.countDown()}
-                        else event("calibration_requested",kind,prepare){failure=it;done.countDown()}
+                        else event("calibration_requested",kind,prepare,expires){failure=it;done.countDown()}
                     }
-                    "zero" -> if(body.optBoolean("deflated"))zero { response ->
+                    "zero" -> if(body.optBoolean("deflated"))zero(expires) { response ->
                         if(response.success)event("hardware_zero","",0.0){failure=it;done.countDown()}
                         else {failure=response.value;done.countDown()}
                     } else {failure="Confirm the sensor is deflated and outside the body.";done.countDown()}
@@ -224,13 +224,14 @@ object CivetCollector {
             } catch(e: Exception) {storageError="Pressure received but local save failed: ${e.message}"}
         }
     }
-    fun event(type: String, kind: String, prepare: Double, callback: (String?)->Unit) {handler.post {
-        if(lastPacket==0L||SystemClock.elapsedRealtime()-lastPacket>1500){callback("Wait for live pressure samples.");return@post}
+    fun event(type: String, kind: String, prepare: Double, expires: Long=Long.MAX_VALUE, callback: (String?)->Unit) {handler.post {
+        if(System.currentTimeMillis()>=expires){callback("Phone command expired; please retry.");return@post}
+        if(type=="calibration_requested"&&(lastPacket==0L||SystemClock.elapsedRealtime()-lastPacket>1500)){callback("Wait for live pressure samples.");return@post}
         val wall=System.currentTimeMillis()
         val row=JSONObject().put("type",type).put("kind",kind).put("prepare_s",prepare).put("timestamp_ms",wall)
             .put("monotonic_ms",SystemClock.elapsedRealtime()).put("sequence",++sequence).put("connection_id",connectionId).put("capture_id",captureId)
         journal.execute {
-            try {TelemetryJournal.append("civet","$captureId-${row.getLong("sequence")}",wall,row);synchronized(ring){ring.add(row);while(ring.size>1200)ring.removeFirst()};callback(null)}
+            try {check(System.currentTimeMillis()<expires){"Phone command expired; please retry."};TelemetryJournal.append("civet","$captureId-${row.getLong("sequence")}",wall,row);synchronized(ring){ring.add(row);while(ring.size>1200)ring.removeFirst()};callback(null)}
             catch(e: Exception){callback("Cannot save calibration event: ${e.message}")}
         }
     }}
@@ -242,7 +243,8 @@ object CivetCollector {
             .put("samples",samples).put("journal_cursor",replay?.second).put("address",address).put("capture_id",captureId).put("age_ms",if(lastPacket>0)SystemClock.elapsedRealtime()-lastPacket else null)
             .put("error",storageError.ifBlank {error}).put("mirrorError",mirrorError).put("localSaved",storageError.isBlank()&&synchronized(ring){ring.isNotEmpty()})
     }
-    fun zero(callback: (CallbackResponse)->Unit) {handler.post {
+    fun zero(expires: Long=Long.MAX_VALUE, callback: (CallbackResponse)->Unit) {handler.post {
+        if(System.currentTimeMillis()>=expires){callback(CallbackResponse(false,"Phone command expired; please retry."));return@post}
         val current=device;val service=current?.getServices()?.find {it.getCharacteristic(commandUuid)!=null}
         if(current==null||service==null||lastPacket==0L){callback(CallbackResponse(false,"Wait for live pressure before zeroing."));return@post}
         val char=service.getCharacteristic(commandUuid)
