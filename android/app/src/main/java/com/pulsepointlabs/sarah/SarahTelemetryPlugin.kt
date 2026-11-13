@@ -12,7 +12,7 @@ class SarahTelemetryPlugin : Plugin() {
     private val io = Executors.newSingleThreadExecutor()
     override fun load() { TelemetryJournal.init(context) }
     @PluginMethod fun status(call: PluginCall) = io.execute {
-        try { call.resolve(JSObject().put("localCount",TelemetryJournal.count()).put("bloodPressure",TelemetryJournal.recent("blood_pressure"))) }
+        try { call.resolve(JSObject().put("localCount",TelemetryJournal.count()).put("bloodPressure",TelemetryJournal.recent("blood_pressure")).put("cuff",OmronCollector.state())) }
         catch(error: Exception) { call.reject("Cannot read local telemetry: ${error.message}") }
     }
     @PluginMethod fun fullscreen(call: PluginCall) { activity.runOnUiThread {

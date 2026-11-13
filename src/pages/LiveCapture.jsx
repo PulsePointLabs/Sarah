@@ -1,7 +1,7 @@
 import "./liveCaptureMedia.css";
 import { Button } from "@/components/ui/button";
 import BloodPressureCuffControls from "@/components/live/BloodPressureCuffControls";
-import { cuffReceiptSince } from "@/lib/omronCuffStatus";
+import { cuffReceiptSince, summarizeOmronConnection } from "@/lib/omronCuffStatus";
 import CivetLiveCard from "@/components/CivetLiveCard.jsx";
 import { PhoneTelemetry, isPhoneAcquisition } from "@/lib/phoneTelemetry.js";
 import { HOWL_MAX_INTENSITY } from "@/lib/howlIntensity.js";
@@ -1966,6 +1966,13 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         const data=await PhoneTelemetry.status();
         if(active){
           setPhoneJournalCount(data.localCount||0);setPhoneJournalError('');
+          if(data.cuff){
+            setBpOmronListening(Boolean(data.cuff.listening));
+            setBpCapture(previous=>({...previous,cuffConnected:Boolean(data.cuff.connected),cuffConnectionMessage:summarizeOmronConnection(data.cuff),
+              cuffDeliveryPending:Boolean(data.cuff.pendingReadings?.length),}));
+            for(const reading of data.cuff.pendingReadings||[])noteCuffReceipt(reading);
+            if(data.cuff.lastDeliveredReading?.external_id)noteCuffReceipt(data.cuff.lastDeliveredReading);
+          }
           const readings=(data.bloodPressure||[]).map(r=>correctOmronFutureDstReading(r))
             .filter(r=>Number.isFinite(Date.parse(r.measured_at))).sort((a,b)=>Date.parse(b.measured_at)-Date.parse(a.measured_at));
           if(readings[0])setStoredTelemetryBp(previous=>!previous||Date.parse(readings[0].measured_at)>=Date.parse(previous.measured_at)?readings[0]:previous);
@@ -4099,7 +4106,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   }, [captureArmed, recordingTransportActive]);
 
   const recentHrPacket = hasRecentHrPacket();
-  const hrConnected = Boolean(recentHrPacket || status?.hr?.sourceStatus?.connected || status?.hr?.connected);
+  const hrConnected = isPhoneAcquisition()?recentHrPacket:Boolean(recentHrPacket || status?.hr?.sourceStatus?.connected || status?.hr?.connected);
   const emgSourceAt = emgTelemetry?.source_at || status?.emg?.lastSourceAt || status?.emg?.lastMessageAt;
   const emgLive = captureMode !== "hr" && recordingActive && isRecent(emgSourceAt);
   const telemetryEmgLive = isRecent(emgSourceAt);
@@ -4219,7 +4226,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   ].filter(Boolean).join(" · ") : "Waiting for a cuff reading";
   const leftEmgLevel = readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct);
   const rightEmgLevel = readNumber(emgTelemetry?.right_pct);
-  const displayedHr = heldCurrentHr;
+  const displayedHr = recentHrPacket ? heldCurrentHr : null;
   const hrResponseDelta = displayedHr != null && Number(heldBaselineHr) > 0 ? displayedHr - heldBaselineHr : null;
   const currentObservation = telemetryHistory.at(-1);
   const priorObservation = currentObservation
