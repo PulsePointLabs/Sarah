@@ -85,7 +85,13 @@ try {
   status = await (await fetch(base + '/status')).json();
   assert.equal(status.hr.directH10.collectorId, 'phone');
   assert.equal((await post('/hr-direct-h10/telemetry', { ...previousInstall, packetId: randomUUID(), measuredAt: Date.now() })).status, 409, 'fresh foreign collectors still cannot steal ownership');
-  console.log('PASS: original timestamps, durable ack, retry deduplication, collector ownership, shared session, live stream');
+  const primary = {...newer,packetId:randomUUID(),collectorId:'bedside-phone',acquisitionAuthority:'phone',measuredAt:Date.now()};
+  response=await post('/hr-direct-h10/telemetry',primary);
+  assert.equal(response.status,200,'the acquiring APK can become the telemetry authority without a desktop claim');
+  status=await (await fetch(base+'/status')).json();
+  assert.equal(status.hr.directH10.collectorId,'bedside-phone');
+  assert.equal((await post('/hr-direct-h10/claim',{collectorId:'chrome-monitor',collectorKind:'Chrome'})).status,409,'the browser remains a viewer while the phone is acquiring');
+  console.log('PASS: original timestamps, raw packet retention, durable ack, retry deduplication, phone authority, shared session, live stream');
   process.exitCode = 0;
 } catch (error) {
   console.error(error); process.exitCode = 1;

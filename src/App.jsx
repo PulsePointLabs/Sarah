@@ -55,7 +55,7 @@ const AuthenticatedApp = () => {
     navigateToLogin,
   } = useAuth();
   const bootScreenVisibleRef = useRef(null);
-  const [offlineCapture, setOfflineCapture] = useState(false);
+  const [offlineCapture, setOfflineCapture] = useState(() => Capacitor.getPlatform()==='android' && location.pathname!=='/chat');
   const openOfflineCapture = Capacitor.getPlatform() === 'android' && location.pathname !== '/chat'
     ? <button type="button" onClick={() => setOfflineCapture(true)}
         className="mt-4 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">
@@ -163,7 +163,7 @@ const AuthenticatedApp = () => {
     });
   }, [bootScreenVisible, isLoadingAuth, isLoadingPublicSettings]);
 
-  if (offlineCapture) {
+  if (offlineCapture && location.pathname !== '/chat') {
     return <LiveCapture phoneOnly onExitPhoneCapture={() => setOfflineCapture(false)} />;
   }
 

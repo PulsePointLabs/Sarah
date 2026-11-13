@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { CivetPlot } from './CivetCard.jsx';
 import { civetRequest } from '../hooks/useCivet.js';
+import { isPhoneAcquisition } from '../lib/phoneTelemetry.js';
 import './civet.css';
 
 export default function CivetSetup({ live, onClose }) {
@@ -9,6 +11,8 @@ export default function CivetSetup({ live, onClose }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const sample = live.latest;
+  const phone = isPhoneAcquisition();
+  const remotePhone = !phone && live.acquisition === 'phone';
   const connected = live.state === 'connected' && !!sample;
   const status = sample?.calibration_status;
   const preparing = status?.phase === 'preparing';
@@ -39,18 +43,22 @@ export default function CivetSetup({ live, onClose }) {
   const tone = !connected || preparing || settling ? 'waiting' : collecting ? status?.tone || 'waiting' : needsRest || status?.phase === 'failed' || (sample?.calibration?.reference && !ready) ? 'warning' : 'good';
   const end = sample?.t ?? 0;
   const rows = connected ? (live.history || []).filter(r => r.t >= end - 10 && r.t <= end) : [];
-  return <div className="civet-setup-backdrop"><section role="dialog" aria-modal="true" aria-label="Connect CIVET" className="civet-setup">
+  return createPortal(<div className="civet-setup-backdrop"><section role="dialog" aria-modal="true" aria-label="Connect CIVET" className="civet-setup">
     <header><h2>CIVET pressure setup</h2><button onClick={onClose}>Close</button></header>
-    <div className="civet-connection"><strong>{connected ? 'Connected · live pressure' : live.state}{live.battery != null ? ` · ${live.battery}% battery` : ''}</strong><span>{live.recordingId ? 'Recording to session' : 'Start a Sarah session to record'}</span></div>
-    <details open={!connected}><summary>Bluetooth connection</summary><div className="civet-connection-controls">
-      <button disabled={busy || active} onClick={() => action('install')}>Install helper (once)</button>
-      <button disabled={busy || active} onClick={() => action('scan')}>Scan for CIVET</button>
+    <div className="civet-connection"><strong>{connected ? 'Receiving live pressure' : live.connected ? 'Bluetooth connected · waiting for pressure' : live.state === 'connecting' ? 'Connecting to sensor…' : live.state === 'stale' ? 'Pressure signal interrupted' : 'No live pressure connection'}{live.battery != null ? ` · ${live.battery}% battery` : ''}</strong>
+      <span>{phone ? 'Source: this phone’s Bluetooth · no server required' : live.acquisition==='phone' ? 'Source: Sarah phone · server receives copies' : 'Source: server computer’s Bluetooth'}</span>
+      <span>{phone ? live.localRecording ? 'Raw pressure is retained in private phone storage.' : 'Local acquisition stopped.' : live.recordingId ? 'Recording to session' : 'Start a Sarah session to record'}</span></div>
+    {remotePhone && <p className="civet-calibration-note">This is a copy of pressure acquired by Sarah on your phone. Use Devices &amp; Setup on that phone to connect, zero, or calibrate the sensor.</p>}
+    <details hidden={remotePhone} open={!connected}><summary>Bluetooth connection</summary><div className="civet-connection-controls">
+      {!phone && <button disabled={busy || active} onClick={() => action('install')}>Install helper (once)</button>}
+      <button disabled={busy || active} onClick={() => action('scan')}>{phone?'Choose CIVET on this phone':'Scan near server computer'}</button>
       <select aria-label="CIVET device" value={address} onChange={e => setAddress(e.target.value)}><option value="">Choose sensor</option>{address && !devices.some(d=>d.address===address) && <option value={address}>Remembered CIVET · {address}</option>}{devices.map(d => <option key={d.address} value={d.address}>{d.name} · {d.address}</option>)}</select>
       <button disabled={busy || active || !address} onClick={() => action('connect', { address })}>Connect</button>
       <button disabled={busy} onClick={() => action('disconnect')}>Disconnect</button>
     </div></details>
-    {live.remembered && <div className="civet-connection-controls"><label><input type="checkbox" checked={live.remembered.autoReconnect} disabled={busy} onChange={e=>action('remember',{enabled:e.target.checked})}/> Reconnect my CIVET when Live Capture opens</label><button disabled={busy} onClick={()=>action('remember',{forget:true})}>Forget sensor</button>{live.autoReconnectPaused && <span>Disconnected by you · press Connect to resume.</span>}</div>}
+    {live.remembered && !remotePhone && <div className="civet-connection-controls"><label><input type="checkbox" checked={live.remembered.autoReconnect} disabled={busy} onChange={e=>action('remember',{enabled:e.target.checked})}/> Reconnect my CIVET when Live Capture opens</label><button disabled={busy} onClick={()=>action('remember',{forget:true})}>Forget sensor</button>{live.autoReconnectPaused && <span>Disconnected by you · press Connect to resume.</span>}</div>}
     {(error || live.error) && <p role="alert" className="civet-setup-error">{error || live.error}</p>}
+    {phone && live.mirrorError && <p className="civet-calibration-note">Saved on phone · server copy pending. Local acquisition continues.</p>}
     {notice && <p role="status">{notice}</p>}
     <div className="civet-calibration-feedback" data-tone={tone}>
       <div className="civet-calibration-heading"><div><h3>{title}</h3><p aria-live="polite">{feedback}</p></div>
@@ -62,10 +70,10 @@ export default function CivetSetup({ live, onClose }) {
       {sample?.calibration && <p className="civet-calibration-note">Rest: {sample.calibration.baseline.toFixed(2)} kPa{sample.calibration.reference != null ? ` · Hold rise: ${sample.calibration.reference.toFixed(2)} kPa = 100% of calibration hold` : ' · Hold not yet accepted'}. Repeat rest and hold after changing position or inflation.</p>}
     </div>
     <div className="civet-calibration-actions">
-      <button disabled={!connected || busy || active} onClick={() => begin('baseline')}><b>{baselineReady ? 'Redo rest' : '1 · Start rest'}</b><span>3 seconds to prepare · 5 seconds relaxed</span></button>
-      <button disabled={!connected || !baselineReady || busy || active} onClick={() => begin('reference')}><b>{status?.kind === 'reference' ? 'Redo hold' : '2 · Start hold'}</b><span>{baselineReady ? '3 seconds to prepare · 5 seconds steady' : 'Complete rest first to enable hold'}</span></button>
+      <button disabled={remotePhone || !connected || busy || active} onClick={() => begin('baseline')}><b>{baselineReady ? 'Redo rest' : '1 · Start rest'}</b><span>3 seconds to prepare · 5 seconds relaxed</span></button>
+      <button disabled={remotePhone || !connected || !baselineReady || busy || active} onClick={() => begin('reference')}><b>{status?.kind === 'reference' ? 'Redo hold' : '2 · Start hold'}</b><span>{baselineReady ? '3 seconds to prepare · 5 seconds steady' : 'Complete rest first to enable hold'}</span></button>
     </div>
-    <div className="civet-zero-row"><button disabled={!connected || busy || active} onClick={() => action('zero', { deflated: true })}>Zero — deflated & outside body</button><p>Optional before insertion. Clicking confirms both conditions. Once positioned and inflated, use Start rest instead. Hardware zero clears calibration.</p></div>
+    <div className="civet-zero-row"><button disabled={remotePhone || !connected || busy || active} onClick={() => action('zero', { deflated: true })}>Zero — deflated & outside body</button><p>Optional before insertion. Clicking confirms both conditions. Once positioned and inflated, use Start rest instead. Hardware zero clears calibration.</p></div>
     <p className="civet-calibration-note">{busy ? 'Working…' : 'You can repeat either step. Repositioned or reconnected? Repeat rest and hold. Reference is comfortable pressure, not maximum strength.'}</p>
-  </section></div>;
+  </section></div>,document.fullscreenElement||document.body);
 }

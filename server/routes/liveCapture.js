@@ -2388,6 +2388,7 @@ async function receiveDirectH10(req, res) {
     && directH10CollectorLeaseIsFresh()
     && state.hr.directH10.collectorId !== collectorId
     && !historical
+    && !(native && req.body?.acquisitionAuthority === 'phone')
   ) {
     res.status(409).json({
       error: `Polar H10 is already owned by ${state.hr.directH10.collectorKind || 'another Sarah client'}.`,
@@ -2475,7 +2476,7 @@ async function receiveDirectH10(req, res) {
   }
   if (native) {
     db.prepare('INSERT OR IGNORE INTO native_h10_receipts (packet_id, received_at, payload, recorded) VALUES (?, ?, ?, ?)')
-      .run(packetId, payload.measuredAt, recorded ? null : JSON.stringify(req.body), recorded ? 1 : 0);
+      .run(packetId, payload.measuredAt, JSON.stringify(req.body), recorded ? 1 : 0);
     if (recorded && payload.gestures?.length) {
       const events = [...(currentLiveSessionEntity()?.event_timeline || [])];
       const start = Date.parse(state.session.startedAt || '');

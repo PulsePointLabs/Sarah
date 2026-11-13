@@ -31,7 +31,7 @@
 [data-telemetry-item="phase"] .telemetry-phase-body{grid-template-rows:auto minmax(0,1fr)}
 .telemetry-fit-body .telemetry-phase-explanation,.telemetry-fit-body .telemetry-phase-cue{display:none}
 .telemetry-viewport-grid svg text{font-size:16px}
-[data-telemetry-fullscreen="true"] [data-telemetry-header]{position:absolute;inset:0 0 auto;opacity:0;background:hsl(var(--card));padding:10px;z-index:100}
+[data-telemetry-fullscreen="true"] [data-telemetry-header]{background:hsl(var(--card));z-index:100}
 [data-telemetry-fullscreen="true"] [data-telemetry-header]:hover,[data-telemetry-fullscreen="true"] [data-telemetry-header]:focus-within{opacity:1}
 
 .telemetry-viewport-grid [data-telemetry-item="civet"] :is(p,small,span,label,button,select){font-size:clamp(16px,2.5cqw,24px)}

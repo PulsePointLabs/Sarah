@@ -70,7 +70,7 @@ async function startNativeOmronListener({ onStatus, onReading, onHeldReading, on
       .then(() => { delivered.add(key); return NativeOmronBloodPressure.getState?.().then(state => {
         if (state && nativeOmronListener === listener) onStatus?.(summarizeOmronConnection(state), state);
       }); })
-      .catch((error) => onError?.(error))
+      .catch((error) => { if(!error.mirrorPending)onError?.(error); })
       .finally(() => { inFlight.delete(key); syncDeliveryEndpoint().catch(() => {}); });
     inFlight.set(key, operation);
   };

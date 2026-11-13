@@ -27,7 +27,7 @@ class SarahCaptureService : Service() {
         }
 
         fun stop(context: Context) {
-            if (H10Collector.enabled || OmronCollector.armed) return
+            if (H10Collector.enabled || OmronCollector.armed || CivetCollector.enabled) return
             context.stopService(Intent(context, SarahCaptureService::class.java))
         }
     }
@@ -65,6 +65,7 @@ class SarahCaptureService : Service() {
         }
         H10Collector.restore(applicationContext)
         OmronCollector.restore(applicationContext)
+        CivetCollector.restore(applicationContext)
         return START_STICKY
     }
 

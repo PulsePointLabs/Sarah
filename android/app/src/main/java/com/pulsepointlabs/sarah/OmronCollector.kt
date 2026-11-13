@@ -54,6 +54,17 @@ object OmronCollector {
     @Synchronized fun init(ctx: Context) {
         if (initialized) return
         context = ctx.applicationContext
+        TelemetryJournal.init(context)
+        // Preserve already captured readings when upgrading an existing install.
+        runCatching {
+            val existing=pendingReadings()
+            prefs.getString("last_delivered_reading",null)?.let {existing.put(org.json.JSONObject(it))}
+            for(index in 0 until existing.length()) {
+                val reading=existing.getJSONObject(index)
+                val received=runCatching {java.time.Instant.parse(reading.optJSONObject("raw")?.optString("received_at")).toEpochMilli()}.getOrDefault(0L)
+                TelemetryJournal.append("blood_pressure",reading.optString("external_id"),received,reading.put("local_saved",true))
+            }
+        }
         endpoint = prefs.getString("endpoint", "").orEmpty()
         runCatching {
             val saved = JSONArray(prefs.getString("connection_diagnostics", "[]"))
@@ -387,6 +398,13 @@ object OmronCollector {
         val reading = runCatching { parseMeasurement(bytes, device) }.getOrElse {
             emitError(it.message ?: "OMRON sent an unreadable blood-pressure packet.")
             return
+        }
+        try {
+            reading.put("local_saved",true)
+            TelemetryJournal.append("blood_pressure",reading.getString("external_id")!!,System.currentTimeMillis(),reading)
+        } catch(error: Exception) {
+            reading.put("local_saved",false)
+            emitError("Cuff reading received, but local history could not be saved: ${error.message}")
         }
         // Persist before crossing into the WebView. If its renderer is restarted between
         // this callback and the API save, arm() replays the packet using its stable id.

@@ -5,7 +5,7 @@ export function summarizeOmronConnection(state = {}) {
     : state.state === "connecting" || state.state === "connected" ? "Connecting to cuff…"
       : "Waiting for cuff to wake — not connected yet.";
   const pending = state.pendingReadings?.length || Boolean(state.pendingReading);
-  const delivery = pending ? state.deliveryError
+  const delivery = pending && state.pendingReading?.local_saved ? " Saved on phone · server copy pending." : pending ? state.deliveryError
     ? " Reading received; server save failed. Retrying automatically."
     : " Reading received; saving to Sarah…" : "";
   const held = state.heldReadings?.length ? " Older reading preserved; its date needs recovery." : "";

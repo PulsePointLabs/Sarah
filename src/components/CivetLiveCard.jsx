@@ -17,7 +17,7 @@ function Reading({ value, unit = 'kPa', label, primary = false }) {
 function LivePlot({ snapshot, zoom }) {
   const ref = useRef(null), [size, setSize] = useState({ width: 600, height: 160 });
   useLayoutEffect(() => { const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height })); observer.observe(ref.current); return () => observer.disconnect(); }, []);
-  const { width, height } = size, left = 28, right = Math.max(left + 10, width - 8), top = 8, bottom = Math.max(top + 15, height - 28);
+  const { width, height } = size, short = height < 65, left = 28, right = Math.max(left + 10, width - 8), top = short ? 4 : 8, bottom = Math.max(top + 15, height - (short ? 6 : 28));
   const start = snapshot.end - zoom.seconds, x = t => left + (t - start) / zoom.seconds * (right - left);
   const y = value => bottom - (value - zoom.min) / Math.max(1, zoom.max - zoom.min) * (bottom - top);
   let previous = null;
@@ -27,10 +27,10 @@ function LivePlot({ snapshot, zoom }) {
     return `${move ? 'M' : 'L'}${x(row.t)},${y(row.delta_kpa)}`;
   }).join(' ');
   return <svg ref={ref} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Live pressure above recorded rest" data-window-seconds={zoom.seconds}>
-    {[0, .5, 1].map(f => { const value = zoom.min + f * (zoom.max - zoom.min); return <g key={f}><line x1={left} x2={right} y1={y(value)} y2={y(value)} stroke="#35545d" /><text x="0" y={y(value) + 4} fill="#b9cdd4" fontSize="12">{fmt(value)}</text></g>; })}
+    {(short ? [0,1] : [0,.5,1]).map(f => { const value = zoom.min + f * (zoom.max - zoom.min); return <g key={f}><line x1={left} x2={right} y1={y(value)} y2={y(value)} stroke="#35545d" /><text x="0" y={y(value) + 4} fill="#b9cdd4" fontSize={short?10:12}>{fmt(value)}</text></g>; })}
     <path d={trace} stroke="var(--pressure-accent, #55e4ce)" strokeWidth="2.5" fill="none" vectorEffect="non-scaling-stroke" />
-    {snapshot.events.filter(e => e.end >= start && e.end <= snapshot.end).map(e => <rect key={e.id} x={x(Math.max(start, e.onset))} y={bottom + 5} width={Math.max(2, x(e.end) - x(Math.max(start, e.onset)))} height="5" rx="2" fill="var(--pressure-accent, #55e4ce)"><title>{`Resolved pulse ${fmt(e.duration_s, 2)}s`}</title></rect>)}
-    {[0, .5, 1].map(f => <text key={f} x={left + f * (right - left)} y={height - 2} textAnchor={f === 0 ? 'start' : f === 1 ? 'end' : 'middle'} fill="#b9cdd4" fontSize="12">{f === 1 ? 'NOW' : `−${zoom.seconds * (1 - f)}s`}</text>)}
+    {!short && snapshot.events.filter(e => e.end >= start && e.end <= snapshot.end).map(e => <rect key={e.id} x={x(Math.max(start, e.onset))} y={bottom + 5} width={Math.max(2, x(e.end) - x(Math.max(start, e.onset)))} height="5" rx="2" fill="var(--pressure-accent, #55e4ce)"><title>{`Resolved pulse ${fmt(e.duration_s, 2)}s`}</title></rect>)}
+    {!short && [0, .5, 1].map(f => <text key={f} x={left + f * (right - left)} y={height - 2} textAnchor={f === 0 ? 'start' : f === 1 ? 'end' : 'middle'} fill="#b9cdd4" fontSize="12">{f === 1 ? 'NOW' : `−${zoom.seconds * (1 - f)}s`}</text>)}
   </svg>;
 }
 export default function CivetLiveCard({ live, onSetup, expanded = false, compact = false, preferences, onPreferences }) {
@@ -65,7 +65,7 @@ export default function CivetLiveCard({ live, onSetup, expanded = false, compact
   const timer = <Reading value={duration} unit="s" label={timerLabel} />;
   const average = <Reading value={blank ? null : snapshot.average} label="Average · last 30s" />;
   const max = <Reading value={snapshot.sessionMax} label={`Max · ${sessionLabel}`} />;
-  const portalRoot = () => box.current?.ownerDocument.body || document.body;
+  const portalRoot = () => box.current?.ownerDocument.fullscreenElement || box.current?.ownerDocument.body || document.body;
   return <section ref={box} data-pressure-mode={visual.mode} style={{ '--pressure-accent': visual.accent, backgroundColor: visual.background }} className={`civet-live-card civet-monitor civet-monitor-${prefs.layout} ${compact ? 'civet-monitor-compact' : ''} ${small ? 'civet-monitor-small' : ''} ${blank ? 'civet-live-unready' : ''}`} aria-label="CIVET live pressure">
     <span ref={pulseRef} className="civet-pressure-pulse" aria-hidden="true" />
     <header><b>Pelvic pressure</b><div className="civet-monitor-controls"><select aria-label="Pressure card view" value={prefs.layout} onChange={e => change({ layout: e.target.value })}>{Object.entries(layouts).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button aria-pressed={prefs.auto} onClick={() => change({ auto: !prefs.auto })}>Auto zoom: {prefs.auto ? 'on' : 'off'}</button></div></header>

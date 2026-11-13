@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import BloodPressureCuffControls from "@/components/live/BloodPressureCuffControls";
 import { cuffReceiptSince } from "@/lib/omronCuffStatus";
 import CivetLiveCard from "@/components/CivetLiveCard.jsx";
+import { PhoneTelemetry, isPhoneAcquisition } from "@/lib/phoneTelemetry.js";
 import { HOWL_MAX_INTENSITY } from "@/lib/howlIntensity.js";
 import CivetLiveAlert from "@/components/CivetLiveAlert.jsx";
 import CivetSetup from "@/components/CivetSetup.jsx";
@@ -937,6 +938,7 @@ function getH10CollectorIdentity() {
 
 async function claimH10Collector() {
   const collector = getH10CollectorIdentity();
+  if (isPhoneAcquisition()) return collector;
   const response = await fetch(apiUrl("/live-capture/hr-direct-h10/claim"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1692,7 +1694,11 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const [liveEvents, setLiveEvents] = useState([]);
   const [phaseMarkers, setPhaseMarkers] = useState([]);
   const [nearClimaxEpisodeCount, setNearClimaxEpisodeCount] = useState(0);
-  const [hrSourceSettings, setHrSourceSettings] = useState(() => readHrSourceSettings());
+  const [hrSourceSettings, setHrSourceSettings] = useState(() => {
+    const settings=readHrSourceSettings();
+    if(isPhoneAcquisition()){settings.source='direct_h10';writeHrSourceSettings(settings);}
+    return settings;
+  });
   const [hrSourceSaving, setHrSourceSaving] = useState(false);
   const [hrSourceError, setHrSourceError] = useState("");
   const [directH10Status, setDirectH10Status] = useState(() => {
@@ -1763,10 +1769,16 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const [telemetryFullscreen,setTelemetryFullscreen] = useState(false);
   const toggleTelemetryFullscreen = useCallback(async()=>{
     try {
+      if(isPhoneAcquisition()) {
+        const next=!telemetryFullscreen;
+        await PhoneTelemetry.fullscreen({enabled:next});
+        setTelemetryFullscreen(next);setSelectedTelemetryPanel('');setTelemetryControlsOpen(false);
+        return;
+      }
       if(document.fullscreenElement)await document.exitFullscreen();
       else {setSelectedTelemetryPanel('');setTelemetryControlsOpen(false);document.activeElement?.blur?.();await telemetryDisplayRef.current?.requestFullscreen();}
     } catch(error) {toast({title:'Could not open full screen',description:error.message});}
-  },[toast]);
+  },[toast,telemetryFullscreen]);
   const openTelemetryScreen = useCallback(()=>{
     const url=new URL(window.location.href);url.searchParams.set('display','telemetry');url.searchParams.set('standalone','1');url.searchParams.set('captureKind',captureKind);
     const screen=window.open(url.href,'sarah-live-telemetry','popup,width=1440,height=900');
@@ -1778,6 +1790,16 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     document.addEventListener('fullscreenchange',changed);window.addEventListener('keydown',key);
     return()=>{document.removeEventListener('fullscreenchange',changed);window.removeEventListener('keydown',key);};
   },[telemetryFocusView,toggleTelemetryFullscreen]);
+  useEffect(()=>{
+    if(!telemetryFocusView&&telemetryFullscreen&&isPhoneAcquisition()){
+      setTelemetryFullscreen(false);PhoneTelemetry.fullscreen({enabled:false}).catch(()=>{});
+    }
+  },[telemetryFocusView,telemetryFullscreen]);
+  useEffect(()=>{
+    const exited=()=>setTelemetryFullscreen(false);
+    window.addEventListener('sarah-native-fullscreen-exit',exited);
+    return()=>{window.removeEventListener('sarah-native-fullscreen-exit',exited);if(isPhoneAcquisition())PhoneTelemetry.fullscreen({enabled:false}).catch(()=>{});};
+  },[]);
 
   const [detailedTelemetryOpen, setDetailedTelemetryOpen] = useState(false);
   const [draggedTelemetryPanelId, setDraggedTelemetryPanelId] = useState("");
@@ -1825,7 +1847,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   });
   const [bpOmronListening, setBpOmronListening] = useState(false);
   const [launchProfile, setLaunchProfile] = useState(() => readLiveCaptureLaunchProfile());
-  const [captureTab, setCaptureTab] = useState(() => !phoneOnly && captureMode === "hr" ? "telemetry" : "camera");
+  const [captureTab, setCaptureTab] = useState(() => phoneOnly || captureMode === "hr" ? "telemetry" : "camera");
   const [obsWorkflow, setObsWorkflow] = useState(false);
   const [cameraAudioActive, setCameraAudioActive] = useState(false);
   const [cameraCapture, setCameraCapture] = useState({ phase: "idle", startedAt: null });
@@ -1934,6 +1956,24 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const bpForegroundRefreshCooldownRef = useRef(0);
   const [heldBpReadings, setHeldBpReadings] = useState({});
   const bpCaptureOpenedAtRef = useRef(Date.now());
+  const [phoneJournalCount,setPhoneJournalCount]=useState(0);
+  const [phoneJournalError,setPhoneJournalError]=useState('');
+  useEffect(()=>{
+    if(!isPhoneAcquisition())return;
+    let active=true,timer;
+    const read=async()=>{
+      try {
+        const data=await PhoneTelemetry.status();
+        if(active){
+          setPhoneJournalCount(data.localCount||0);setPhoneJournalError('');
+          const readings=(data.bloodPressure||[]).map(r=>correctOmronFutureDstReading(r))
+            .filter(r=>Number.isFinite(Date.parse(r.measured_at))).sort((a,b)=>Date.parse(b.measured_at)-Date.parse(a.measured_at));
+          if(readings[0])setStoredTelemetryBp(previous=>!previous||Date.parse(readings[0].measured_at)>=Date.parse(previous.measured_at)?readings[0]:previous);
+        }
+      } catch(error){if(active)setPhoneJournalError(error.message||'Local telemetry history is unavailable.');}
+      finally{if(active)timer=setTimeout(read,2000);}
+    };read();return()=>{active=false;clearTimeout(timer);};
+  },[]);
   const noteCuffReceipt = useCallback((reading) => {
     reading = correctOmronFutureDstReading(reading);
     const receipt = cuffReceiptSince(reading, bpCaptureOpenedAtRef.current - 30 * 60 * 1000);
@@ -2375,7 +2415,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     if (receivedAt >= latestAt) {
       latestHrRef.current = localTelemetry;
       setHrTelemetry(localTelemetry);
-      if (phoneCaptureRef.current || !canUseServerPrediction(serverMonitoringSnapshotRef.current, localTelemetry)) {
+      if (isPhoneAcquisition() || phoneCaptureRef.current || !canUseServerPrediction(serverMonitoringSnapshotRef.current, localTelemetry)) {
         appendTelemetryPointRef.current(localTelemetry, latestEmgRef.current);
       }
     }
@@ -2480,6 +2520,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     setHrSourceSaving(true);
     setHrSourceError("");
     writeHrSourceSettings(resolvedSettings);
+    if(isPhoneAcquisition()){setHrSourceSaving(false);return;}
     try {
       const response = await fetch(apiUrl("/live-capture/hr-source"), {
         method: "POST",
@@ -3698,11 +3739,11 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     const generation = ++refreshGeneration;
     fetch(apiUrl("/live-capture/status"), { cache: "no-store" }).then((res) => res.json()).then((data) => {
       if (disposed || generation !== refreshGeneration) return;
-      serverMonitoringSnapshotRef.current = data.monitoring;
-      serverMonitoringRef.current = ownsMonitoringHistory(data.monitoring) && !phoneCaptureRef.current;
+      serverMonitoringSnapshotRef.current = isPhoneAcquisition()?null:data.monitoring;
+      serverMonitoringRef.current = !isPhoneAcquisition() && ownsMonitoringHistory(data.monitoring) && !phoneCaptureRef.current;
       setStatus(data);
-      const nextHr = preferLiveHrTelemetry(data.hr?.latestTelemetry || null, latestHrRef.current);
-      const nextEmg = data.emg?.latestTelemetry || null;
+      const nextHr = isPhoneAcquisition()?latestHrRef.current:preferLiveHrTelemetry(data.hr?.latestTelemetry || null, latestHrRef.current);
+      const nextEmg = isPhoneAcquisition()?null:data.emg?.latestTelemetry || null;
       latestHrRef.current = nextHr;
       latestEmgRef.current = nextEmg;
       setHrTelemetry(nextHr);
@@ -3730,10 +3771,10 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     events.onerror = () => setConnected(false);
     events.addEventListener("status", (event) => {
       const data = JSON.parse(event.data);
-      serverMonitoringSnapshotRef.current = data.monitoring;
-      serverMonitoringRef.current = ownsMonitoringHistory(data.monitoring) && !phoneCaptureRef.current;
-      const nextHr = preferLiveHrTelemetry(data.hr?.latestTelemetry || null, latestHrRef.current);
-      const nextEmg = data.emg?.latestTelemetry || null;
+      serverMonitoringSnapshotRef.current = isPhoneAcquisition()?null:data.monitoring;
+      serverMonitoringRef.current = !isPhoneAcquisition() && ownsMonitoringHistory(data.monitoring) && !phoneCaptureRef.current;
+      const nextHr = isPhoneAcquisition()?latestHrRef.current:preferLiveHrTelemetry(data.hr?.latestTelemetry || null, latestHrRef.current);
+      const nextEmg = isPhoneAcquisition()?null:data.emg?.latestTelemetry || null;
       latestHrRef.current = nextHr;
       latestEmgRef.current = nextEmg;
       setStatus(data);
@@ -3745,6 +3786,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       setCalibrationCommandStatus(data.emg?.calibrationCommandStatus || null);
     });
     events.addEventListener("hr_telemetry", (event) => {
+      if(isPhoneAcquisition())return;
       const data = JSON.parse(event.data);
       latestHrRef.current = data;
       setHrTelemetry(data);
@@ -3752,10 +3794,12 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       maybeTriggerHeartbeatFromTelemetry(data);
     });
     events.addEventListener("emg_telemetry", (event) => {
+      if(isPhoneAcquisition())return;
       const data = JSON.parse(event.data);
       latestEmgRef.current = data;
     });
     events.addEventListener("telemetry_snapshot", (event) => {
+      if(isPhoneAcquisition())return;
       const snapshot = JSON.parse(event.data);
       serverMonitoringSnapshotRef.current = snapshot.monitoring;
       const nextHr = preferLiveHrTelemetry(snapshot.hr || null, latestHrRef.current);
@@ -3923,7 +3967,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     );
   }, [hrTelemetry]);
 
-  const serverPredictionReady = !cameraRecording && canUseServerPrediction(status?.monitoring, hrTelemetry);
+  const serverPredictionReady = !isPhoneAcquisition() && !cameraRecording && canUseServerPrediction(status?.monitoring, hrTelemetry);
   const prediction = useMemo(() => (serverPredictionReady && status?.monitoring?.basePrediction) || computeLiveClimaxPrediction(hrTelemetry, emgTelemetry, telemetryHistory, {
     sessionTimeSec: cameraRecording || liveSession?.active ? getCurrentSessionTime() : telemetryHistory.at(-1)?.sessionTimeSec,
   }), [cameraRecording, liveSession?.active, serverPredictionReady, status?.monitoring?.basePrediction, emgTelemetry, getCurrentSessionTime, hrTelemetry, telemetryHistory]);
@@ -4168,9 +4212,9 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     : "--";
   const latestBpHelper = displayedBp ? [
     displayedBp.pulse_bpm ? `${Math.round(Number(displayedBp.pulse_bpm))} bpm pulse` : "",
-    telemetryBp.state === "pending" ? "Received · server save pending"
+    telemetryBp.state === "pending" ? displayedBp.local_saved ? "Saved on phone · server copy pending" : "Received · server save pending"
       : telemetryBp.state === "clock_unknown" ? "Received · cuff date unavailable"
-      : telemetryBp.state === "session" ? "Saved in this session" : "Saved to BP history",
+      : telemetryBp.state === "session" ? "Saved in this session" : displayedBp.local_saved ? "Saved in phone history" : "Saved to BP history",
     displayedBp.measured_at && telemetryBp.state !== "clock_unknown" ? formatBloodPressureTime(displayedBp.measured_at, displayedBp.timestamp_source) : "",
   ].filter(Boolean).join(" · ") : "Waiting for a cuff reading";
   const leftEmgLevel = readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct);
@@ -5265,7 +5309,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         readings = Array.isArray(recent?.readings) && recent.readings.length ? recent.readings : readings;
       }
       const latestStoredReading = readings[0] || null;
-      if (latestStoredReading) setStoredTelemetryBp(latestStoredReading);
+      if (latestStoredReading && !isPhoneAcquisition()) setStoredTelemetryBp(previous=>!previous||Date.parse(latestStoredReading.measured_at)>Date.parse(previous.measured_at)?latestStoredReading:previous);
       const camera = phoneCaptureRef.current;
       if (camera) {
         for (const reading of readings) {
@@ -5343,9 +5387,17 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     if (receipt) setBpCapture(prev => ({...prev, lastCuffReceipt:receipt, cuffDeliveryPending:true,
       ...(belongs && bpSessionKeyRef.current === activeSessionId ? {sessionId:activeSessionId,lastReading:reading} : {})}));
     const sessionId = cameraBelongs ? camera.id : belongs ? activeSessionId : null;
-    const saved = await ingestBloodPressureReadings([sessionId ? {...reading, session: sessionId} : reading]);
+    let saved;
+    try {saved=await ingestBloodPressureReadings([sessionId ? {...reading, session: sessionId} : reading]);}
+    catch(error) {
+      if(reading.local_saved){
+        setBpCapture(prev=>({...prev,error:'',syncing:false,cuffDeliveryPending:true,message:'Saved on this phone · server copy pending.'}));
+        error.mirrorPending=true;
+      }
+      throw error;
+    }
     if (!Array.isArray(saved?.readings) || !saved.readings.length) throw new Error("The BP server did not confirm saving this reading. It will be retried.");
-    const latestReading = saved.readings[0];
+    const latestReading = {...saved.readings[0],...(reading.local_saved?{local_saved:true}:{})};
     setStoredTelemetryBp(previous => Date.parse(previous?.measured_at || "") > Date.parse(latestReading.measured_at) ? previous : latestReading);
     if (cameraBelongs) camera.bloodPressure.set(bloodPressureKey(latestReading), latestReading);
     if (bpSessionKeyRef.current !== activeSessionId) return;
@@ -5414,6 +5466,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         },
         onReading: (reading) => {
           return saveOmronReadingRef.current(reading).catch((error) => {
+            if(error.mirrorPending)throw error;
             setBpCapture((prev) => ({
               ...prev,
               syncing: false,
@@ -7627,7 +7680,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         <div className="flex flex-wrap items-center gap-2 md:mt-1">
           {phoneOnly && <button type="button" onClick={onExitPhoneCapture} disabled={phoneCaptureBusy}
             className="rounded-lg border border-border px-3 py-2 text-sm font-semibold disabled:opacity-50">
-            Exit Phone Capture
+            Open server workspace
           </button>}
           {(!phoneOnly || captureTab === "telemetry") &&
           <button
@@ -7643,13 +7696,40 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
 
       {!focusView && <nav aria-label="Live Capture sections" className="flex flex-wrap gap-1 rounded-xl border border-border bg-card p-1.5">
         {[["session", "Session"], ["camera", "Camera"], ["telemetry", "Telemetry"], ["voice", "Voice & Audio"], ["devices", "Devices & Setup"]]
-          .filter(([id]) => !phoneOnly || ["camera", "telemetry", "voice"].includes(id)).map(([id, label]) => (
+          .filter(([id]) => !phoneOnly || ["camera", "telemetry", "voice", "devices"].includes(id)).map(([id, label]) => (
           <button key={id} type="button" aria-pressed={captureTab === id} onClick={() => setCaptureTab(id)}
             className={`min-h-10 flex-1 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-semibold ${captureTab === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
             {label}
           </button>
         ))}
       </nav>}
+      {!focusView && phoneOnly && captureTab==='devices' && <section className="space-y-4 rounded-xl border border-border p-4" aria-label="Phone sensor setup">
+        <h3 className="font-semibold text-primary">Sensors connected to this phone</h3>
+        <p className="text-sm">A session and a server connection are not required for bedside monitoring.</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <strong>Polar H10</strong><span>{directH10Status.lastMessageAt&&Date.now()-Date.parse(directH10Status.lastMessageAt)<5000?'Receiving heart rate and RR':directH10Status.connecting?'Connecting…':'No fresh heart-rate signal'}</span>
+          <button className="rounded-lg border border-primary/40 px-3 py-2" onClick={()=>connectDirectH10({forcePicker:true})}>Choose H10</button>
+          <button className="rounded-lg border border-border px-3 py-2" onClick={()=>disconnectDirectH10()}>Disconnect H10</button>
+        </div>
+        <BloodPressureCuffControls label="Phone blood pressure" listening={bpOmronListening} busy={bpOmronActionInFlightRef.current}
+          message={bpCapture.error || bpCapture.cuffConnectionMessage || 'Cuff listener stopped.'} error={Boolean(bpCapture.error)}
+          receipt={bpCapture.lastCuffReceipt} sessionReading={displayedBp} deliveryPending={bpCapture.cuffDeliveryPending}
+          onToggle={toggleOmronBloodPressureListener} onChoose={()=>startOmronBloodPressureListenerForLiveSession({forceDevicePicker:true})} onDiagnostics={copyCuffDiagnostics}/>
+        <div className="flex flex-wrap items-center gap-3"><strong>CIVET</strong><span>{civet.latest?'Receiving live pressure':civet.connected?'Bluetooth connected · waiting for pressure':'No fresh pressure signal'}</span>
+          <button className="rounded-lg border border-primary/40 px-3 py-2" onClick={()=>setCivetSetupOpen(true)}>CIVET · connect &amp; calibrate</button></div>
+        <p className="text-sm text-muted-foreground">Arduino EMG still requires its computer USB helper. It is not a phone-acquired sensor in this build.</p>
+      </section>}
+      {!focusView && isPhoneAcquisition() && <section className="rounded-xl border border-primary/40 bg-card p-3 text-sm" aria-label="Phone acquisition status">
+        <strong>This phone acquires and keeps your telemetry.</strong>
+        <p>{phoneJournalError || `${phoneJournalCount.toLocaleString()} local records · H10, BP and CIVET use this phone’s Bluetooth. Server copies are separate.`}</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button className="rounded-lg border border-border px-3 py-2" onClick={()=>{setCaptureTab('telemetry');setFocusView(true,'telemetry');}}>Bedside monitor</button>
+          <button className="rounded-lg border border-border px-3 py-2" onClick={async()=>{
+            try{const result=await PhoneTelemetry.export();toast({title:'Telemetry exported',description:`${result.location}/${result.name}`});}
+            catch(error){toast({title:'Export failed',description:error.message});}
+          }}>Export phone telemetry</button>
+        </div>
+      </section>}
       {!focusView && showAdvancedSetupConsole && <BloodPressureCuffControls label="Blood pressure cuff controls" listening={bpOmronListening} busy={bpOmronActionInFlightRef.current}
         message={bpCapture.error || bpCapture.cuffConnectionMessage || (bpOmronListening ? "Waiting for cuff." : "Cuff disconnected.")}
         error={Boolean(bpCapture.error || bpCapture.cuffDeliveryPending)} receipt={bpCapture.lastCuffReceipt} sessionReading={latestBpReading} deliveryPending={bpCapture.cuffDeliveryPending}

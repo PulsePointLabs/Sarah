@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import path from 'node:path';
 import { dataDir } from '../config.js';
-import { upsertEntity } from '../db.js';
+import { upsertEntity, db } from '../db.js';
+import { createPhoneCivetIngest } from '../services/phoneCivetIngest.js';
 import { createCivetService } from '../services/civet.js';
 import { CIVET_VERSION } from '../../src/lib/civetAnalysis.js';
 import { civetCsv } from '../../src/lib/civetExport.js';
@@ -10,6 +11,8 @@ export function createCivetRouter(session, onService = () => {}) {
   const router=Router();
   const service=createCivetService({directory:path.join(dataDir,'civet'),session,onRecorded:current=>upsertEntity(current.entity||'Session',current.id,{civet_enabled:true,civet_algorithm:CIVET_VERSION})});
   onService(service);
+  const ingestPhone=createPhoneCivetIngest(db,reading=>service.ingestPhone(reading));
+  router.post('/phone-ingest',(req,res)=>{try{res.json(ingestPhone(req.body?.packets));}catch(error){res.status(400).json({error:error.message});}});
   router.get('/status',(_req,res)=>res.json(service.status()));
   router.get('/session/:id',(req,res)=>{try{const data={samples:service.samples(req.params.id),analysis:service.analysis(req.params.id)};res.json(req.query.encoding==='columns'?packCivetTimeline(data):data);}catch(error){res.status(400).json({error:error.message});}});
   router.get('/session/:id/export',(req,res)=>{try{

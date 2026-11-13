@@ -10,6 +10,15 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     private SarahWebChromeClient sarahWebChromeClient;
     private int phoneTextZoom = 100;
+    private boolean telemetryFullscreen = false;
+
+    public void setTelemetryFullscreen(boolean enabled) {
+        telemetryFullscreen = enabled;
+        androidx.core.view.WindowInsetsControllerCompat controller = androidx.core.view.WindowCompat.getInsetsController(getWindow(),getWindow().getDecorView());
+        controller.setSystemBarsBehavior(androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        if(enabled) controller.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars());
+        else controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars());
+    }
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -22,6 +31,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SarahKeepAwakePlugin.class);
         registerPlugin(SarahVoicePlugin.class);
         registerPlugin(SarahH10Plugin.class);
+        registerPlugin(SarahCivetPlugin.class);
+        registerPlugin(SarahTelemetryPlugin.class);
         registerPlugin(SharedVitalImportPlugin.class);
         super.onCreate(savedInstanceState);
         if (getBridge() != null && getBridge().getWebView() != null) {
@@ -78,6 +89,11 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onBackPressed() {
         if (sarahWebChromeClient != null && sarahWebChromeClient.hideCustomView()) return;
+        if (telemetryFullscreen) {
+            setTelemetryFullscreen(false);
+            getBridge().getWebView().evaluateJavascript("window.dispatchEvent(new Event('sarah-native-fullscreen-exit'));",null);
+            return;
+        }
         super.onBackPressed();
     }
 

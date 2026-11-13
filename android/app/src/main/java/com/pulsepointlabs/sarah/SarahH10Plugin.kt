@@ -29,7 +29,11 @@ class SarahH10Plugin : Plugin() {
         H10Collector.emit = { event -> if (foreground) notifyListeners("packet", JSObject(event.toString())) }
     }
     override fun handleOnPause() { foreground = false }
-    override fun handleOnResume() { foreground = true }
+    override fun handleOnResume() {
+        foreground = true
+        H10Collector.restore(context.applicationContext)
+        if(H10Collector.enabled)runCatching {SarahCaptureService.start(context)}
+    }
     override fun handleOnDestroy() { foreground = false }
     @PluginMethod fun configure(call: PluginCall) {
         try {
@@ -91,9 +95,18 @@ object H10Collector {
     @Synchronized fun init(context: Context) {
         if (initialized) return
         app = context.applicationContext
+        TelemetryJournal.init(app)
         db = app.openOrCreateDatabase("h10_delivery.db", Context.MODE_PRIVATE, null)
         db.execSQL("CREATE TABLE IF NOT EXISTS packets (id INTEGER PRIMARY KEY AUTOINCREMENT, endpoint TEXT NOT NULL, body TEXT NOT NULL)")
         initialized = true
+        journal.execute {
+            runCatching {db.rawQuery("SELECT body FROM packets ORDER BY id",null).use {c ->
+                while(c.moveToNext()) {
+                    val packet=JSONObject(c.getString(0))
+                    TelemetryJournal.append("h10",packet.getString("packetId"),packet.optLong("measuredAt"),packet)
+                }
+            }}
+        }
         io.scheduleWithFixedDelay({ flush() }, 0, 1, TimeUnit.SECONDS)
         // One replaceable live candidate, never an unbounded second queue. The
         // SQLite FIFO still retains every reading until a durable acknowledgement.
@@ -221,12 +234,14 @@ object H10Collector {
         if (characteristic == HR) {
             lastPacket = receivedAt
             val payload = JSONObject().put("nativeH10", true).put("packetId", UUID.randomUUID().toString())
+                .put("acquisitionAuthority","phone")
                 .put("connectionId", connectionId).put("collectorId", collectorId).put("collectorKind", "Sarah Android APK")
                 .put("deviceName", deviceName).put("measuredAt", receivedAt).put("heartRatePacket", value).put("pmdFrames", frames)
             frames = JSONArray()
             val url = endpoint
             journal.execute {
                 try {
+                    TelemetryJournal.append("h10",payload.getString("packetId"),receivedAt,payload)
                     val row = ContentValues().apply { put("endpoint", url); put("body", payload.toString()) }
                     val rowId = db.insertOrThrow("packets", null, row)
                     latestDelivery = PendingDelivery(rowId, url, payload.toString(), receivedAt)
@@ -291,7 +306,7 @@ object H10Collector {
         return JSONObject().put("enabled", enabled).put("connected", device?.isConnected() == true)
             .put("deviceId", address).put("deviceName", deviceName)
             .put("lastPacketAt", lastPacket).put("pending", pending).put("lastDeliveredAt", lastDeliveredAt)
-            .put("error", liveDeliveryError.ifBlank { signalWarning.ifBlank { deliveryError } })
+            .put("error",signalWarning).put("mirrorError",liveDeliveryError.ifBlank {deliveryError})
     }
 
     fun stop() = handler.post {
