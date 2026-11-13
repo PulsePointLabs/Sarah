@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.303",
-  "commit": "746b724",
-  "commitMessage": "Resume the saved cuff listener when Android returns to foreground",
-  "builtAt": "2026-11-12T03:23:52.184Z"
+  "version": "0.1.304",
+  "commit": "100dc4e",
+  "commitMessage": "Serialize H10 GATT setup and separate offline BP display from server refresh",
+  "builtAt": "2026-11-13T03:00:57.918Z"
 };

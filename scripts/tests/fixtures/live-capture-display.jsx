@@ -10,4 +10,4 @@ window.EventSource = class {
   close() { fixtureListeners.clear(); }
 };
 window.emitTelemetryFixture = (type, data) => fixtureListeners.get(type)?.({ data: JSON.stringify(data) });
-createRoot(document.getElementById('root')).render(<QueryClientProvider client={new QueryClient()}><BrowserRouter><LiveCapture /></BrowserRouter></QueryClientProvider>);
+createRoot(document.getElementById('root')).render(<QueryClientProvider client={new QueryClient()}><BrowserRouter><LiveCapture phoneOnly={new URLSearchParams(location.search).get('phone')==='1'} /></BrowserRouter></QueryClientProvider>);
