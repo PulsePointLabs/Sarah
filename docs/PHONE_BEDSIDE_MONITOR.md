@@ -1,7 +1,8 @@
 # Phone acquisition and bedside monitoring
 
 The Android APK opens the full Sarah app with its normal navigation. The local
-monitor is available inside Live Capture, and **Open Phone Capture** remains an
+monitor is an explicit **Open standalone phone capture** option inside Live
+Capture, and **Open Phone Capture** remains an
 explicit fallback on the connection/login screen. No OBS recording,
 Sarah server, or active session is required to acquire and display these sensors:
 
@@ -14,7 +15,9 @@ Sarah server, or active session is required to acquire and display these sensors
 Choose **Devices & Setup** to connect sensors. CIVET must be powered on and
 discoverable. Its setup distinguishes a Bluetooth connection from actual fresh
 pressure. Collect rest and a comfortable reference hold on the acquiring phone.
-Opening the server workspace does not change which device acquires Bluetooth.
+**Return to Sarah** restores normal navigation and the server-connected Live
+Capture view. Being an Android app does not automatically select phone acquisition.
+Already enabled native collectors retain their background acquisition and data.
 
 After measuring BP, press the cuff's transfer button if it has gone idle. Pairing,
 listening, receipt, a local save, and a server copy are separate facts. Invalid

@@ -42,6 +42,7 @@ import NewBodyExploration from './pages/NewBodyExploration';
 import { incrementLifecycleMountCount, recordPwaLifecycleEvent } from '@/lib/pwaLifecycleDiagnostics';
 import { startSharedVitalImportBridge } from '@/lib/sharedVitalImport';
 import { refreshSarahVoicePreferences } from '@/lib/sarahVoicePreferences';
+import { setPhoneAcquisition } from '@/lib/phoneTelemetry.js';
 
 const AuthenticatedApp = () => {
   const location = useLocation();
@@ -56,8 +57,14 @@ const AuthenticatedApp = () => {
   } = useAuth();
   const bootScreenVisibleRef = useRef(null);
   const [offlineCapture, setOfflineCapture] = useState(false);
+  const enterPhoneCapture = () => {setPhoneAcquisition(true);setOfflineCapture(true);};
+  useEffect(()=>{
+    const enter=()=>{setPhoneAcquisition(true);setOfflineCapture(true);};
+    window.addEventListener('sarah-open-phone-capture',enter);
+    return()=>window.removeEventListener('sarah-open-phone-capture',enter);
+  },[]);
   const openOfflineCapture = Capacitor.getPlatform() === 'android' && location.pathname !== '/chat'
-    ? <button type="button" onClick={() => setOfflineCapture(true)}
+    ? <button type="button" onClick={enterPhoneCapture}
         className="mt-4 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">
         Open Phone Capture
       </button>
@@ -164,7 +171,7 @@ const AuthenticatedApp = () => {
   }, [bootScreenVisible, isLoadingAuth, isLoadingPublicSettings]);
 
   if (offlineCapture && location.pathname !== '/chat') {
-    return <LiveCapture phoneOnly onExitPhoneCapture={() => setOfflineCapture(false)} />;
+    return <LiveCapture phoneOnly onExitPhoneCapture={() => {setPhoneAcquisition(false);setOfflineCapture(false);navigate('/capture');}} />;
   }
 
   // Show loading spinner while checking app public settings or auth

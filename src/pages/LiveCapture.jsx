@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import BloodPressureCuffControls from "@/components/live/BloodPressureCuffControls";
 import { cuffReceiptSince, summarizeOmronConnection } from "@/lib/omronCuffStatus";
 import CivetLiveCard from "@/components/CivetLiveCard.jsx";
-import { PhoneTelemetry, isPhoneAcquisition } from "@/lib/phoneTelemetry.js";
+import { PhoneTelemetry, isPhoneAcquisition, isNativeSarah } from "@/lib/phoneTelemetry.js";
 import { HOWL_MAX_INTENSITY } from "@/lib/howlIntensity.js";
 import CivetLiveAlert from "@/components/CivetLiveAlert.jsx";
 import CivetSetup from "@/components/CivetSetup.jsx";
@@ -1771,7 +1771,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const [telemetryFullscreen,setTelemetryFullscreen] = useState(false);
   const toggleTelemetryFullscreen = useCallback(async()=>{
     try {
-      if(isPhoneAcquisition()) {
+      if(isNativeSarah()) {
         const next=!telemetryFullscreen;
         await PhoneTelemetry.fullscreen({enabled:next});
         setTelemetryFullscreen(next);setSelectedTelemetryPanel('');setTelemetryControlsOpen(false);
@@ -1793,14 +1793,14 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     return()=>{document.removeEventListener('fullscreenchange',changed);window.removeEventListener('keydown',key);};
   },[telemetryFocusView,toggleTelemetryFullscreen]);
   useEffect(()=>{
-    if(!telemetryFocusView&&telemetryFullscreen&&isPhoneAcquisition()){
+    if(!telemetryFocusView&&telemetryFullscreen&&isNativeSarah()){
       setTelemetryFullscreen(false);PhoneTelemetry.fullscreen({enabled:false}).catch(()=>{});
     }
   },[telemetryFocusView,telemetryFullscreen]);
   useEffect(()=>{
     const exited=()=>setTelemetryFullscreen(false);
     window.addEventListener('sarah-native-fullscreen-exit',exited);
-    return()=>{window.removeEventListener('sarah-native-fullscreen-exit',exited);if(isPhoneAcquisition())PhoneTelemetry.fullscreen({enabled:false}).catch(()=>{});};
+    return()=>{window.removeEventListener('sarah-native-fullscreen-exit',exited);if(isNativeSarah())PhoneTelemetry.fullscreen({enabled:false}).catch(()=>{});};
   },[]);
 
   const [detailedTelemetryOpen, setDetailedTelemetryOpen] = useState(false);
@@ -3491,6 +3491,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   }, [connectDirectH10]);
 
   useEffect(() => {
+    if(isNativeSarah()&&!isPhoneAcquisition())return;
     if (hrSourceSettings.source !== "direct_h10") {
       directH10ReconnectEnabledRef.current = false;
       directH10AutoConnectStartedRef.current = false;
@@ -3700,7 +3701,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   }, [disconnectDirectH10]);
 
   useEffect(() => {
-    if (!canUseNativeAndroidBle()) return undefined;
+    if (!canUseNativeAndroidBle() || !isPhoneAcquisition()) return undefined;
     let active = true;
     let unobserve;
     let configuredEndpoint = "";
@@ -7728,6 +7729,11 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         <div className="flex flex-wrap items-center gap-3"><strong>CIVET</strong><span>{civet.latest?'Receiving live pressure':civet.connected?'Bluetooth connected · waiting for pressure':'No fresh pressure signal'}</span>
           <button className="rounded-lg border border-primary/40 px-3 py-2" onClick={()=>setCivetSetupOpen(true)}>CIVET · connect &amp; calibrate</button></div>
         <p className="text-sm text-muted-foreground">Arduino EMG still requires its computer USB helper. It is not a phone-acquired sensor in this build.</p>
+      </section>}
+      {!focusView && isNativeSarah() && !phoneOnly && <section className="rounded-xl border border-border bg-card p-3 text-sm" aria-label="Capture workflow">
+        <strong>Full Sarah · server-connected workflow</strong>
+        <p>Use Sarah normally with your server, Chrome and EXE. For direct phone sensors and offline capture, open the standalone phone workflow.</p>
+        <button className="mt-2 rounded-lg border border-primary/40 px-3 py-2" onClick={()=>window.dispatchEvent(new Event('sarah-open-phone-capture'))}>Open standalone phone capture</button>
       </section>}
       {!focusView && isPhoneAcquisition() && <section className="rounded-xl border border-primary/40 bg-card p-3 text-sm" aria-label="Phone acquisition status">
         <strong>This phone acquires and keeps your telemetry.</strong>
