@@ -24,7 +24,11 @@ class SarahCivetPlugin : Plugin() {
         CivetCollector.restore(context.applicationContext)
         if(CivetCollector.enabled) runCatching { SarahCaptureService.start(context) }
     }
-    @PluginMethod fun status(call: PluginCall) { call.resolve(CivetCollector.status(call.getLong("after") ?: 0L,call.getLong("journalAfter"))) }
+    @PluginMethod fun status(call: PluginCall) {
+        // Capacitor getLong ignores JSON Integers (including zero). Both small
+        // and large JS cursors must work or journal replay silently falls back.
+        call.resolve(CivetCollector.status((call.data.opt("after") as? Number)?.toLong() ?: 0L,(call.data.opt("journalAfter") as? Number)?.toLong()))
+    }
     @PluginMethod fun configure(call: PluginCall) {
         try {CivetCollector.configure(call.getString("endpoint").orEmpty());call.resolve()}
         catch(e: Exception){call.reject(e.message)}
