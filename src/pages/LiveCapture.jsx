@@ -500,6 +500,7 @@ function fmtMmSs(value) {
 }
 
 function fmtNumber(value, digits = 1) {
+  if(value==null||value==='')return '—';
   const n = Number(value);
   return Number.isFinite(n) ? n.toFixed(digits) : "—";
 }
@@ -527,6 +528,7 @@ function isRecent(value, maxAgeMs = 5000) {
 
 function readNumber(...values) {
   for (const value of values) {
+    if(value==null||value==='')continue;
     const n = Number(value);
     if (Number.isFinite(n)) return n;
   }
@@ -5276,6 +5278,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   ]);
 
   const syncBloodPressureForLiveSession = useCallback(async ({ manual = false } = {}) => {
+    if(isPhoneAcquisition())return;
     if (bpSyncInFlightRef.current) {
       if (manual) {
         setBpCapture((prev) => ({

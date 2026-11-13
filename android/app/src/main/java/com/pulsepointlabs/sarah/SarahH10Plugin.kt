@@ -89,6 +89,34 @@ object H10Collector {
     private var generation = 0
     private var connectionId = ""
     private val subscriptions = linkedSetOf<Pair<String, String>>()
+    private class GattRequest(val token: Int, val start: ((CallbackResponse)->Unit)->Unit, val callback: (CallbackResponse)->Unit) {var finished=false}
+    private val gattRequests=java.util.ArrayDeque<GattRequest>()
+    private var activeGattRequest: GattRequest?=null
+    private fun finishGatt(request: GattRequest, result: CallbackResponse) {
+        if(request.finished)return
+        request.finished=true
+        if(activeGattRequest===request)activeGattRequest=null
+        request.callback(if(request.token==generation)result else CallbackResponse(false,"H10 connection changed; retrying."))
+        pumpGatt()
+    }
+    private fun pumpGatt() {
+        if(activeGattRequest!=null)return
+        val request=gattRequests.pollFirst()?:return
+        activeGattRequest=request
+        if(request.token!=generation){finishGatt(request,CallbackResponse(false,"H10 connection changed."));return}
+        handler.postDelayed({finishGatt(request,CallbackResponse(false,"H10 operation timed out; retrying."))},15000)
+        try {request.start {result->handler.post {finishGatt(request,result)}}}
+        catch(error: Exception){finishGatt(request,CallbackResponse(false,error.message?:"H10 operation failed"))}
+    }
+    private fun queueGatt(start: ((CallbackResponse)->Unit)->Unit, callback: (CallbackResponse)->Unit) {
+        gattRequests.add(GattRequest(generation,start,callback));pumpGatt()
+    }
+    private fun cancelGatt() {
+        val pending=mutableListOf<GattRequest>()
+        activeGattRequest?.let {pending.add(it)};pending.addAll(gattRequests)
+        activeGattRequest=null;gattRequests.clear()
+        pending.forEach {if(!it.finished){it.finished=true;it.callback(CallbackResponse(false,"H10 reconnected; operation cancelled."))}}
+    }
     private var frames = JSONArray()
     var emit: ((JSONObject) -> Unit)? = null
 
@@ -160,6 +188,7 @@ object H10Collector {
 
     private fun open(callback: (CallbackResponse) -> Unit) {
         val token = ++generation
+        cancelGatt();subscriptions.clear()
         connecting = true
         connectionId = UUID.randomUUID().toString()
         frames = JSONArray()
@@ -181,6 +210,7 @@ object H10Collector {
         if (!enabled || connecting) return
         val old = device
         generation++
+        cancelGatt()
         device = null
         connecting = true
         fun resume() { handler.post {
@@ -213,19 +243,22 @@ object H10Collector {
         val current = device
         if (current == null) { callback(CallbackResponse(false, "H10 disconnected")); return@post }
         val token = generation
-        current.setNotifications(UUID.fromString(service), UUID.fromString(characteristic), enabled, { response ->
-            val receivedAt = System.currentTimeMillis()
-            handler.post { if (token == generation && response.success) packet(characteristic, response.value, receivedAt) }
-        }, 12000) { result -> handler.post {
-            if (result.success) { if (enabled) subscriptions.add(service to characteristic) else subscriptions.remove(service to characteristic) }
-            callback(result)
-        } }
+        queueGatt({done->
+            if(enabled&&subscriptions.contains(service to characteristic))done(CallbackResponse(true,"Already subscribed"))
+            else current.setNotifications(UUID.fromString(service), UUID.fromString(characteristic), enabled, { response ->
+                val receivedAt = System.currentTimeMillis()
+                handler.post { if (token == generation && response.success) packet(characteristic, response.value, receivedAt) }
+            }, 12000) { result -> handler.post {
+                if (token==generation&&result.success) { if (enabled) subscriptions.add(service to characteristic) else subscriptions.remove(service to characteristic) }
+                done(result)
+            } }
+        },callback)
     }
 
     fun write(value: String, timeout: Long, callback: (CallbackResponse) -> Unit) = handler.post {
         val current = device
         if (current == null) callback(CallbackResponse(false, "H10 disconnected"))
-        else current.write(UUID.fromString(PMD_SERVICE), UUID.fromString(CONTROL), value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT, timeout, callback)
+        else queueGatt({done->current.write(UUID.fromString(PMD_SERVICE), UUID.fromString(CONTROL), value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT, timeout, done)},callback)
     }
 
     private fun packet(characteristic: String, value: String, receivedAt: Long) {
@@ -311,6 +344,7 @@ object H10Collector {
 
     fun stop() = handler.post {
         enabled = false; generation++; connecting = false
+        cancelGatt()
         if (initialized) app.getSharedPreferences("h10_collector", 0).edit().putBoolean("enabled", false).apply()
         device?.disconnect(3000) { }; device = null; subscriptions.clear()
         // Already received packets stay queued until acknowledged, including after a disconnect.
