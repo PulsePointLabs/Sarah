@@ -51,3 +51,29 @@ test('explicit server acquisition is preserved while phone copies remain archive
     assert.equal(service.status().acquisition,'phone');
   }finally{assert.equal(path.dirname(directory),os.tmpdir());fs.rmSync(directory,{recursive:true,force:true});}
 });
+test('Chrome calibration of a phone stream waits for acquisition events rather than changing only the server',async()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'phone-civet-control-'));
+  try {
+    const commands=[];const service=createCivetService({directory,phoneCommand:async(capture,action,body)=>{commands.push({capture,action,body});}});
+    let sequence=0,t=0;
+    const feed=(extra={})=>service.ingestPhone({...reading(++sequence),capture_id:'capture-test',monotonic_ms:(t+=100),timestamp_ms:Date.now(),...extra});
+    feed();await service.calibrate({kind:'baseline',prepare_s:3});
+    assert.equal(commands[0].capture,'capture-test');assert.equal(commands[0].body.kind,'baseline');
+    assert.equal(service.status().latest.baseline_ready,false);
+    feed({type:'calibration_requested',kind:'baseline',prepare_s:0});
+    for(let i=0;i<52;i++)feed();
+    assert.equal(service.status().latest.baseline_ready,true);
+    assert.equal(service.status().latest.calibration.baseline,2.5);
+    await service.zero({deflated:true});assert.equal(commands[1].action,'zero');
+    feed({type:'hardware_zero'});feed();assert.equal(service.status().latest.baseline_ready,false);
+  }finally{fs.rmSync(directory,{recursive:true,force:true});}
+});
+test('the phone stream choice survives a server restart instead of reverting to downstairs Bluetooth',async()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'phone-civet-source-'));
+  try {
+    createCivetService({directory}).source({source:'phone'});
+    const restarted=createCivetService({directory});await restarted.resume();
+    assert.equal(restarted.status().acquisition,'phone');assert.equal(restarted.status().state,'waiting_for_phone');
+    restarted.source({source:'server'});assert.equal(createCivetService({directory}).status().acquisition,'server');
+  }finally{fs.rmSync(directory,{recursive:true,force:true});}
+});

@@ -24,7 +24,7 @@ class SarahCivetPlugin : Plugin() {
         CivetCollector.restore(context.applicationContext)
         if(CivetCollector.enabled) runCatching { SarahCaptureService.start(context) }
     }
-    @PluginMethod fun status(call: PluginCall) { call.resolve(CivetCollector.status(call.getLong("after") ?: 0L)) }
+    @PluginMethod fun status(call: PluginCall) { call.resolve(CivetCollector.status(call.getLong("after") ?: 0L,call.getLong("journalAfter"))) }
     @PluginMethod fun configure(call: PluginCall) {
         try {CivetCollector.configure(call.getString("endpoint").orEmpty());call.resolve()}
         catch(e: Exception){call.reject(e.message)}
@@ -78,7 +78,7 @@ object CivetCollector {
         if(initialized)return
         app=context.applicationContext;TelemetryJournal.init(app);initialized=true
         endpoint=app.getSharedPreferences("civet_collector",0).getString("endpoint","").orEmpty()
-        mirrorIo.scheduleWithFixedDelay({runCatching {mirror()}},1,1,java.util.concurrent.TimeUnit.SECONDS)
+        mirrorIo.scheduleWithFixedDelay({runCatching {control()};runCatching {mirror()}},1,1,java.util.concurrent.TimeUnit.SECONDS)
         handler.post(object: Runnable {override fun run() {
             if(enabled&&!connecting&&(device?.isConnected()!=true || SystemClock.elapsedRealtime()-maxOf(lastPacket,connectedAt)>7000)) open(null)
             handler.postDelayed(this,3000)
@@ -88,6 +88,48 @@ object CivetCollector {
         val uri=java.net.URI(value)
         require(uri.scheme in listOf("http","https")&&!uri.host.isNullOrBlank()) {"Invalid server copy address"}
         endpoint=value;app.getSharedPreferences("civet_collector",0).edit().putString("endpoint",value).apply()
+    }
+    private fun control() {
+        if(endpoint.isBlank()||!enabled)return
+        val base=endpoint.substringBeforeLast('/')+"/phone-control"
+        fun exchange(url: String, body: JSONObject?=null): JSONObject {
+            val connection=java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            try {
+                connection.connectTimeout=3000;connection.readTimeout=3000;connection.instanceFollowRedirects=false
+                if(body!=null){connection.requestMethod="POST";connection.doOutput=true;connection.setRequestProperty("Content-Type","application/json");connection.outputStream.use {it.write(body.toString().toByteArray(Charsets.UTF_8))}}
+                check(connection.responseCode in 200..299){"Phone control unavailable (HTTP ${connection.responseCode})"}
+                return connection.inputStream.bufferedReader().use {JSONObject(it.readText())}
+            } finally {connection.disconnect()}
+        }
+        val commands=exchange(base+"?capture_id="+captureId).getJSONArray("commands")
+        val prefs=app.getSharedPreferences("civet_collector",0)
+        for(i in 0 until commands.length()) {
+            val command=commands.getJSONObject(i);val id=command.getString("id")
+            val key="control_$id"
+            var result=prefs.getString(key,null)
+            if(result==null) {
+                val done=java.util.concurrent.CountDownLatch(1)
+                var failure: String?=null
+                val body=command.getJSONObject("body")
+                when(command.getString("action")) {
+                    "calibrate" -> {
+                        val kind=body.optString("kind");val prepare=body.optDouble("prepare_s",0.0)
+                        if(kind !in listOf("baseline","reference")||!prepare.isFinite()||prepare<0||prepare>10){failure="Invalid calibration request";done.countDown()}
+                        else event("calibration_requested",kind,prepare){failure=it;done.countDown()}
+                    }
+                    "zero" -> if(body.optBoolean("deflated"))zero { response ->
+                        if(response.success)event("hardware_zero","",0.0){failure=it;done.countDown()}
+                        else {failure=response.value;done.countDown()}
+                    } else {failure="Confirm the sensor is deflated and outside the body.";done.countDown()}
+                    else -> {failure="Unknown phone pressure command";done.countDown()}
+                }
+                if(!done.await(6,java.util.concurrent.TimeUnit.SECONDS))failure="Phone did not finish the pressure command."
+                result=JSONObject().put("id",id).put("capture_id",captureId).put("error",failure?:JSONObject.NULL).toString()
+                // Persist before replying so a lost network response cannot repeat zero/calibration.
+                check(prefs.edit().putString(key,result).commit()) {"Cannot save phone command confirmation"}
+            }
+            exchange(base,JSONObject(result))
+        }
     }
     private fun mirror() {
         if(endpoint.isBlank())return
@@ -192,11 +234,12 @@ object CivetCollector {
             catch(e: Exception){callback("Cannot save calibration event: ${e.message}")}
         }
     }}
-    fun status(after: Long): JSObject {
+    fun status(after: Long, journalAfter: Long?=null): JSObject {
         val fresh=lastPacket>0&&SystemClock.elapsedRealtime()-lastPacket<1500
-        val samples=JSONArray();synchronized(ring){ring.filter {it.getLong("sequence")>after}.forEach {samples.put(it)}}
+        val replay=journalAfter?.let {TelemetryJournal.civetReplay(captureId,it)}
+        val samples=replay?.first?:JSONArray().also {samples->synchronized(ring){ring.filter {it.getLong("sequence")>after}.forEach {samples.put(it)}}}
         return JSObject().put("enabled",enabled).put("connected",device?.isConnected()==true).put("state",if(fresh)"streaming" else state.takeUnless {it=="streaming"}?:"stale")
-            .put("samples",samples).put("address",address).put("capture_id",captureId).put("age_ms",if(lastPacket>0)SystemClock.elapsedRealtime()-lastPacket else null)
+            .put("samples",samples).put("journal_cursor",replay?.second).put("address",address).put("capture_id",captureId).put("age_ms",if(lastPacket>0)SystemClock.elapsedRealtime()-lastPacket else null)
             .put("error",storageError.ifBlank {error}).put("mirrorError",mirrorError).put("localSaved",storageError.isBlank()&&synchronized(ring){ring.isNotEmpty()})
     }
     fun zero(callback: (CallbackResponse)->Unit) {handler.post {

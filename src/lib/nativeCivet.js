@@ -6,17 +6,25 @@ import { apiUrl } from './mobileApiBase.js';
 
 const plugin=registerPlugin('SarahCivet');
 let processor=createCivetProcessor(), summarize=createCivetMonitorSummary();
-let history=[],latest=null,captureId='',connectionId='',after=0,summary=null,remembered=null;
+let history=[],latest=null,captureId='',connectionId='',after=0,journalAfter=0,summary=null,remembered=null;
 let snapshot={state:'disconnected',history:[],latest:null,acquisition:'phone',recordingId:null};
 let pending;
 let configured='';
+export async function followPhoneCivet() {
+  // An explicit phone connection also selects that stream for Chrome. Failure
+  // here must never prevent offline/local Bluetooth acquisition.
+  try {await fetch(apiUrl('/civet/source'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:'phone'}),signal:AbortSignal.timeout(2500)});}catch{/* Server copy is optional. */}
+}
 export async function nativeCivetStatus() {
   if(pending)return pending;
   pending=(async()=>{
     const endpoint=new URL(apiUrl('/civet/phone-ingest'),window.location.href).href;
     if(endpoint!==configured){await plugin.configure({endpoint});configured=endpoint;}
-    const state=await plugin.status({after});
-    if(state.capture_id!==captureId) {captureId=state.capture_id;connectionId='';after=0;history=[];latest=null;processor=createCivetProcessor();summarize=createCivetMonitorSummary();}
+    let state=await plugin.status({after,journalAfter});
+    if(state.capture_id!==captureId) {
+      captureId=state.capture_id;connectionId='';after=0;journalAfter=0;history=[];latest=null;processor=createCivetProcessor();summarize=createCivetMonitorSummary();
+      state=await plugin.status({after:0,journalAfter:0});
+    }
     for(const row of state.samples||[]) {
       if(row.sequence<=after)continue;
       after=row.sequence;
@@ -29,6 +37,7 @@ export async function nativeCivetStatus() {
       latest.events=feature.events.map(e=>({...e,id:`${captureId}-${e.id}`,segment:`${captureId}-${e.segment}`}));
       summary=summarize(latest);history.push(latest);after=row.sequence;
     }
+    journalAfter=state.journal_cursor??journalAfter;
     history=history.filter(row=>latest&&latest.t-row.t<=60).slice(-1200);
     if(state.address)remembered={address:state.address,autoReconnect:state.enabled};
     snapshot={...state,state:state.state==='streaming'?'connected':state.state,history,latest:state.age_ms!=null&&state.age_ms<1500&&Date.now()-latest?.timestamp_ms<1500?latest:null,
@@ -44,7 +53,7 @@ export async function nativeCivetRequest(action,body={}) {
     const device=await BleClient.requestDevice({namePrefix:'47L124'});
     return {devices:[{address:device.deviceId,name:device.name||'CIVET'}]};
   }
-  if(action==='connect') {await plugin.connect({deviceId:body.address});return nativeCivetStatus();}
+  if(action==='connect') {await plugin.connect({deviceId:body.address});await followPhoneCivet();return nativeCivetStatus();}
   if(action==='disconnect') {await plugin.disconnect();return nativeCivetStatus();}
   if(action==='calibrate') {
     if(!snapshot.latest)throw Error('Wait for live phone pressure samples first.');

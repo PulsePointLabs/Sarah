@@ -41,4 +41,11 @@ object TelemetryJournal {
         }
         return rows
     }
+    @Synchronized fun civetReplay(captureId: String, after: Long): Pair<JSONArray,Long> {
+        val rows=JSONArray();var cursor=after
+        db.rawQuery("SELECT row_id, body FROM readings WHERE source='civet' AND external_id LIKE ? AND row_id>? ORDER BY row_id LIMIT 1200",arrayOf("$captureId-%",after.toString())).use { c ->
+            while(c.moveToNext()){cursor=c.getLong(0);rows.put(JSONObject(c.getString(1)))}
+        }
+        return Pair(rows,cursor)
+    }
 }

@@ -10,7 +10,7 @@ import { reprocessCivetRecording, CIVET_REPROCESS_VERSION } from '../../src/lib/
 import { createCivetMonitorSummary } from '../../src/lib/civetLiveMonitor.js';
 const execute=promisify(execFile);
 const helper=fileURLToPath(new URL('../../tools/capture/civet/civet_ble.py',import.meta.url));
-export function createCivetService({directory,session=()=>null,onRecorded=()=>{},run=execute,launch=spawn}) {
+export function createCivetService({directory,session=()=>null,onRecorded=()=>{},run=execute,launch=spawn,phoneCommand=()=>{throw Error('Phone control is unavailable.');}}) {
   const venv=path.join(directory,'python'), python=path.join(venv,process.platform==='win32'?'Scripts/python.exe':'bin/python');
   const connectionFile=path.join(directory,'device','connection.json');
   const validAddress=address=>typeof address==='string'&&/^[a-zA-Z0-9:-]{8,80}$/.test(address);
@@ -29,8 +29,16 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
   let lastHardwareZero=null;
   const deviceMetadataFile=path.join(directory,'device','zero-events.jsonl');
   if(fs.existsSync(deviceMetadataFile)){const lines=fs.readFileSync(deviceMetadataFile,'utf8').trim().split('\n').filter(Boolean);try{lastHardwareZero=JSON.parse(lines.at(-1));}catch{lastHardwareZero=null;}}
-  let state={state:'disconnected',error:null,battery:null,address:null};
-  let acceptPhone=true;
+  const sourceFile=path.join(directory,'device','source.json');
+  let selectedSource=null;
+  try {const saved=JSON.parse(fs.readFileSync(sourceFile,'utf8'));if(['phone','server'].includes(saved.source))selectedSource=saved.source;}catch{/* First use. */}
+  let state={state:selectedSource==='phone'?'waiting_for_phone':'disconnected',acquisition:selectedSource||undefined,error:null,battery:null,address:null};
+  let acceptPhone=selectedSource!=='server';
+  function rememberSource(source) {
+    if(selectedSource===source)return;
+    fs.mkdirSync(path.dirname(sourceFile),{recursive:true});
+    fs.writeFileSync(sourceFile+'.tmp',JSON.stringify({source}));fs.renameSync(sourceFile+'.tmp',sourceFile);selectedSource=source;
+  }
   const safe=id=>{if(!/^[a-zA-Z0-9_-]{1,150}$/.test(id)) throw new Error('Invalid session id'); return path.join(directory,`${id}.jsonl`);};
   process.once('exit',()=>child?.kill());
   const status=()=>({...state,busy,remembered,autoReconnectPaused:paused,latest:lastAt && Date.now()-lastAt<1500 ? latest : null,history,age_ms:lastAt?Date.now()-lastAt:null,recordingId,monitorSummary});
@@ -115,6 +123,7 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
     status, ingest,
     source({source}) {
       if(!['phone','server'].includes(source))throw new Error('Choose phone or server acquisition.');
+      rememberSource(source);
       rejectCommands();const previous=child;child=null;previous?.kill();
       acceptPhone=source==='phone';paused=true;latest=null;history=[];lastAt=0;
       processor=createCivetProcessor();captureId=randomUUID();previousConnection=null;
@@ -126,6 +135,8 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
       if(child){const previous=child;child=null;rejectCommands();previous.kill();processor=createCivetProcessor();history=[];latest=null;lastAt=0;}
       paused=true;
       state.acquisition='phone';
+      rememberSource('phone');
+      state.phoneCaptureId=reading.capture_id;
       if(reading.type==='calibration_requested'){
         try{processor.calibrate(reading.kind,{prepareS:reading.prepare_s});}catch(error){state.error=error.message;}
       }else if(reading.type==='hardware_zero')processor.invalidate();
@@ -133,7 +144,7 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
     },
     samples, analysis,
     async resume() {
-      if(!child&&!busy&&!paused&&remembered?.autoReconnect){try{await service.connect({address:remembered.address});}catch(error){state.error=error.message;}}
+      if(selectedSource!=='phone'&&!child&&!busy&&!paused&&remembered?.autoReconnect){try{await service.connect({address:remembered.address});}catch(error){state.error=error.message;}}
       return status();
     },
     remember({enabled,forget=false}) {
@@ -156,6 +167,7 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
       if(child||busy) throw new Error('Disconnect before reconnecting.');
       if(!validAddress(address)) throw new Error('Choose a discovered CIVET.');
       if(!fs.existsSync(python)) throw new Error('Install the CIVET helper first.');
+      rememberSource('server');
       paused=false;rememberAllowed=true;captureId=randomUUID();previousConnection=null;processor=createCivetProcessor();summarizeMonitor=createCivetMonitorSummary();monitorSummary=null;latest=null;history=[];lastAt=0;
       acceptPhone=false;
       state={state:'connecting',address,error:null,battery:null,acquisition:'server'};
@@ -169,6 +181,7 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
     },
     async zero({deflated}) {
       if(deflated!==true)throw new Error('Confirm CIVET is deflated and outside the body before zeroing.');
+      if(state.acquisition==='phone') {if(!status().latest)throw Error('Wait for live phone pressure samples.');await phoneCommand(state.phoneCaptureId,'zero',{deflated:true});return status();}
       if(!child||!status().latest)throw new Error('Connect CIVET and wait for pressure samples first.');
       if(pendingCommands.size)throw new Error('A CIVET command is already in progress.');
       const command_id=`zero-${randomUUID()}`;
@@ -179,7 +192,14 @@ export function createCivetService({directory,session=()=>null,onRecorded=()=>{}
       });
     },
     disconnect() { paused=true;rejectCommands();const previous=child;child=null;previous?.kill();latest=null;state.state='disconnected';return status(); },
-    calibrate({kind,prepare_s=0}) {if(!status().latest)throw new Error('Wait for live pressure samples.');processor.calibrate(kind,{prepareS:prepare_s});return status();},
+    calibrate({kind,prepare_s=0}) {
+      if(!status().latest)throw new Error('Wait for live pressure samples.');
+      if(!['baseline','reference'].includes(kind)||!Number.isFinite(prepare_s)||prepare_s<0||prepare_s>10)throw Error('Invalid calibration request.');
+      if(kind==='reference'&&!status().latest.baseline_ready)throw Error('Collect rest first.');
+      if(state.acquisition==='phone')return phoneCommand(state.phoneCaptureId,'calibrate',{kind,prepare_s}).then(()=>status());
+      else processor.calibrate(kind,{prepareS:prepare_s});
+      return status();
+    },
   };
   return service;
 }

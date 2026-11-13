@@ -2,15 +2,22 @@ import {civetView} from '../lib/civetView.js';
 import { useEffect, useState, useMemo } from 'react';
 import { apiUrl } from '../lib/mobileApiBase.js';
 import { unpackCivetTimeline } from '../lib/civetTimelineTransport.js';
-import { isPhoneAcquisition } from '../lib/phoneTelemetry.js';
-import { nativeCivetRequest } from '../lib/nativeCivet.js';
+import { isNativeSarah } from '../lib/phoneTelemetry.js';
+import { usesNativeCivet, selectCivetSource } from '../lib/civetSource.js';
+import { nativeCivetRequest, followPhoneCivet } from '../lib/nativeCivet.js';
 export async function civetRequest(action,body,signal) {
-  if(isPhoneAcquisition()&&!action.startsWith('session/')) return nativeCivetRequest(action,body);
+  if(action==='source'&&isNativeSarah()) {
+    selectCivetSource(body.source);
+    if(body.source==='phone'){await followPhoneCivet();return nativeCivetRequest('status');}
+    // Explicit handoff: release BLE before the server tries to acquire it.
+    await nativeCivetRequest('disconnect');
+  }
+  if(usesNativeCivet()&&!action.startsWith('session/')) return nativeCivetRequest(action,body);
   const response=await fetch(apiUrl(`/civet/${action}`),body===undefined?{signal}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal});
   const data=await response.json();if(!response.ok)throw new Error(data.error||'CIVET request failed');return data;
 }
 export function useCivetLive() {
-  const [state,setState]=useState({state:'disconnected',history:[],latest:null,acquisition:isPhoneAcquisition()?'phone':'server'});
+  const [state,setState]=useState({state:'disconnected',history:[],latest:null,acquisition:usesNativeCivet()?'phone':'server'});
   useEffect(()=>{civetRequest('resume',{}).catch(error=>setState(previous=>({...previous,error:error.message})));},[]);
   useEffect(()=>{let active=true,timer;const poll=async()=>{try{const data=await civetRequest('status');if(active)setState(data);}catch(error){if(active)setState(previous=>({...previous,latest:null,error:error.message,state:'unavailable'}));}finally{if(active)timer=setTimeout(poll,250);}};poll();return()=>{active=false;clearTimeout(timer);};},[]);
   return state;

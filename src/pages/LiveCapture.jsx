@@ -7732,8 +7732,12 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       </section>}
       {!focusView && isNativeSarah() && !phoneOnly && <section className="rounded-xl border border-border bg-card p-3 text-sm" aria-label="Capture workflow">
         <strong>Full Sarah · server-connected workflow</strong>
-        <p>Use Sarah normally with your server, Chrome and EXE. For direct phone sensors and offline capture, open the standalone phone workflow.</p>
+        <p>CIVET connects and calibrates through this phone by default, here or in standalone capture. For H10 + BP + CIVET bedside monitoring without the server, open standalone phone capture.</p>
         <button className="mt-2 rounded-lg border border-primary/40 px-3 py-2" onClick={()=>window.dispatchEvent(new Event('sarah-open-phone-capture'))}>Open standalone phone capture</button>
+      </section>}
+      {!focusView && !isNativeSarah() && captureTab==='devices' && <section className="rounded-xl border border-border bg-card p-3 text-sm" aria-label="Laptop capture workflow">
+        <strong>Laptop + OBS · phone sensors upstairs</strong>
+        <p>OBS on the laptop records your cameras. The phone APK connects to CIVET over Bluetooth and sends pressure through Sarah’s server. Open CIVET setup here to calibrate that same stream. The server can stay downstairs.</p>
       </section>}
       {!focusView && isPhoneAcquisition() && <section className="rounded-xl border border-primary/40 bg-card p-3 text-sm" aria-label="Phone acquisition status">
         <strong>This phone acquires and keeps your telemetry.</strong>
