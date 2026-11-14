@@ -7,6 +7,7 @@ import { PhoneTelemetry, isPhoneAcquisition, isNativeSarah } from "@/lib/phoneTe
 import { HOWL_MAX_INTENSITY } from "@/lib/howlIntensity.js";
 import CivetLiveAlert from "@/components/CivetLiveAlert.jsx";
 import LiveSessionConsole from "@/components/LiveSessionConsole.jsx";
+import {hasActiveLiveSession} from '@/lib/liveSessionState.js';
 import CivetSetup from "@/components/CivetSetup.jsx";
 import { useCivetLive } from "@/hooks/useCivet.js";
 import { withCivetEvidence } from "@/lib/civet.js";
@@ -7902,7 +7903,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
 
       {!focusView && showAdvancedSetupConsole && !phoneCaptureBusy && <ObsRecordingSync />}
 
-      {externalRecorderControls && (recordingTransportActive || liveSession?.activeSessionId) && !focusView && !liveSession?.importing && (
+      {externalRecorderControls && hasActiveLiveSession(liveSession,recording) && !focusView && !liveSession?.importing && (
         <button
           type="button"
           onClick={endActiveSession}

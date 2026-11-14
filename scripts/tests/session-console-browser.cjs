@@ -11,6 +11,7 @@ const assert=require('node:assert/strict'),path=require('node:path'),os=require(
  await page.evaluate(()=>window.pause());await page.getByRole('heading',{name:'PAUSED · OBS'}).waitFor();
  await page.evaluate(()=>window.stop());await page.getByRole('heading',{name:'NOT RECORDING'}).waitFor();
  await page.getByLabel('Use CIVET pelvic pressure for this session').check();assert.equal(await page.locator('.civet-live-alert').count(),0);
+ await page.evaluate(()=>window.finishOffline());await page.getByRole('heading',{name:'SESSION ENDED'}).waitFor();assert.equal(await page.getByRole('button',{name:'END ACTIVE SESSION',exact:true}).count(),0);
  await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
  await page.screenshot({path:'logs/session-console-mobile.png'});assert.deepEqual(errors,[]);console.log('PASS recording truth, type choice, title/notes, save, pause, unused/stale CIVET, mobile width');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -1,12 +1,7 @@
 import { useState } from 'react';
+import { describeSessionRecording } from '../lib/liveSessionState.js';
 
-export function sessionRecordingState({ recording, session, camera, obsConnected=true }) {
-  if (camera?.phase === 'recording') return { label: 'RECORDING · phone camera', tone: 'text-red-500', detail: 'Local camera capture is running.' };
-  if(obsConnected===false)return {label:'OBS CONNECTION LOST · recording unconfirmed',tone:'text-amber-500',detail:'OBS may still be recording independently. Sarah cannot confirm its video or session state until the connection returns.'};
-  if (recording?.active) return { label: recording.paused ? 'PAUSED · OBS' : 'RECORDING · OBS', tone: recording.paused ? 'text-amber-500' : 'text-red-500', detail: session?.active ? 'Sarah session and telemetry recording are active.' : 'OBS is recording. Sarah session confirmation is pending.' };
-  if (session?.importing || camera?.phase === 'saving') return { label: 'SAVING · recording has stopped', tone: 'text-amber-500', detail: 'Wait for finalization before starting another session.' };
-  return { label: 'NOT RECORDING', tone: 'text-muted-foreground', detail: session?.active ? 'Sarah has an open record, but OBS is not recording video.' : 'Live heart rate is monitoring only. No session is being recorded.' };
-}
+export const sessionRecordingState=describeSessionRecording;
 
 export default function LiveSessionConsole({ recording, session, camera, obsConnected=true, captureKind, onKindChange, title, notes, onTitleChange, onNotesChange, onSave, onStart, onCamera, busy, error, metadataStatus, hrReady, civetEnabled, onCivetChange }) {
   const [saving,setSaving]=useState(false);
