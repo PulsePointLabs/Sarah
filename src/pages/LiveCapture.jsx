@@ -6,6 +6,7 @@ import CivetLiveCard from "@/components/CivetLiveCard.jsx";
 import { PhoneTelemetry, isPhoneAcquisition, isNativeSarah } from "@/lib/phoneTelemetry.js";
 import { HOWL_MAX_INTENSITY } from "@/lib/howlIntensity.js";
 import CivetLiveAlert from "@/components/CivetLiveAlert.jsx";
+import LiveSessionConsole from "@/components/LiveSessionConsole.jsx";
 import CivetSetup from "@/components/CivetSetup.jsx";
 import { useCivetLive } from "@/hooks/useCivet.js";
 import { withCivetEvidence } from "@/lib/civet.js";
@@ -1743,7 +1744,13 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   useEffect(() => { localStorage.setItem("pulsepoint.telemetryHidden.v1", JSON.stringify(hiddenTelemetryItems)); }, [hiddenTelemetryItems]);
   const setTelemetryItemVisible = (id, visible) => setHiddenTelemetryItems(old => visible ? old.filter(item => item !== id) : [...new Set([...old, id])]);
   const [telemetryControlsOpen, setTelemetryControlsOpen] = useState(false);
-  const civet = useCivetLive();
+  const [civetEnabled,setCivetEnabled]=useState(()=>localStorage.getItem('sarah.session.civetEnabled')==='true');
+  useEffect(()=>{localStorage.setItem('sarah.session.civetEnabled',String(civetEnabled));},[civetEnabled]);
+  const civet = useCivetLive(civetEnabled);
+  const [sessionTitle,setSessionTitle]=useState('');
+  const [sessionNotes,setSessionNotes]=useState('');
+  const [sessionDetailsStatus,setSessionDetailsStatus]=useState('');
+  const pendingSessionDetails=useRef(null);
   const [civetSetupOpen, setCivetSetupOpen] = useState(false);
   const [emgSetupOpen, setEmgSetupOpen] = useState(false);
   const [emgNames, setEmgNames] = useState(() => { try { return JSON.parse(localStorage.getItem("pulsepoint.emgNames")) || []; } catch { return []; } });
@@ -1849,8 +1856,8 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   });
   const [bpOmronListening, setBpOmronListening] = useState(false);
   const [launchProfile, setLaunchProfile] = useState(() => readLiveCaptureLaunchProfile());
-  const [captureTab, setCaptureTab] = useState(() => phoneOnly || captureMode === "hr" ? "telemetry" : "camera");
-  const [obsWorkflow, setObsWorkflow] = useState(false);
+  const [captureTab, setCaptureTab] = useState(() => phoneOnly ? "telemetry" : "session");
+  const [obsWorkflow, setObsWorkflow] = useState(true);
   const [cameraAudioActive, setCameraAudioActive] = useState(false);
   const [cameraCapture, setCameraCapture] = useState({ phase: "idle", startedAt: null });
   const phoneCaptureRef = useRef(null);
@@ -5796,6 +5803,54 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     }, 350);
   }), [hasRecentHrPacket]);
 
+  const saveSessionDetails = async () => {
+    if(!liveSession?.activeSessionId || !liveSession?.active)return;
+    try {
+      const patch={title:sessionTitle.trim(),notes:sessionNotes};
+      await liveRecordApi.update(liveSession.activeSessionId,patch);
+      setActiveSessionDoc(old=>({...old,...patch}));setSessionDetailsStatus('Session title and notes saved.');
+    }catch(error){setSessionDetailsStatus(`Details were not saved: ${error.message}`);}
+  };
+  useEffect(()=>{
+    if(!liveSession?.active || !liveSession.activeSessionId || !pendingSessionDetails.current)return;
+    const details=pendingSessionDetails.current;pendingSessionDetails.current=null;
+    liveRecordApi.update(liveSession.activeSessionId,details).then(()=>setSessionDetailsStatus('Session title and notes saved.')).catch(error=>setSessionDetailsStatus(`Details were not saved: ${error.message}. Use Save session details to retry.`));
+  },[liveSession?.active,liveSession?.activeSessionId,liveRecordApi]);
+  useEffect(()=>{
+    if(!activeSessionDoc?.id || !liveSession?.active || sessionTitle || sessionNotes)return;
+    setSessionTitle(activeSessionDoc.title||'');setSessionNotes(activeSessionDoc.notes||'');
+  },[activeSessionDoc?.id,liveSession?.active]);
+  const startSessionRecording = async () => {
+    if(launchState.busy)return;
+    pendingSessionDetails.current={...(sessionTitle.trim()?{title:sessionTitle.trim()}:{}),...(sessionNotes?{notes:sessionNotes}:{})};
+    setSessionDetailsStatus('Details will be attached when Sarah confirms the new session.');
+    try {
+      if(!recordingTransportActive){
+        if(!obsReady)throw Error('OBS is not connected. Open OBS on the recording computer, or use phone / browser camera instead.');
+        const reply=await fetch(apiUrl('/live-capture/capture-kind'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({captureKind})});
+        if(!reply.ok)throw Error((await reply.json()).error||'Could not set session type.');
+        await startFromLaunchpad({allowWithoutRawSensors:true});
+        setLaunchState(prev=>({...prev,busy:true,message:'Starting OBS recording…'}));
+        let socket=directH10RelaySocketRef.current;
+        if(!socket || socket.readyState>WebSocket.OPEN){socket=new WebSocket(getLiveCaptureRelayUrl());directH10RelaySocketRef.current=socket;}
+        if(socket.readyState===WebSocket.CONNECTING)await new Promise((resolve,reject)=>{
+          const timer=setTimeout(()=>reject(Error('OBS relay connection timed out.')),6000);
+          socket.addEventListener('open',()=>{clearTimeout(timer);resolve();},{once:true});
+          socket.addEventListener('error',()=>{clearTimeout(timer);reject(Error('OBS relay is unavailable.'));},{once:true});
+        });
+        socket.send(JSON.stringify({type:'obs_start_record',source:'live_capture_session',requestId:crypto.randomUUID(),requestedAt:new Date().toISOString()}));
+      }
+      const deadline=Date.now()+20000;
+      while(Date.now()<deadline){
+        const response=await fetch(apiUrl('/live-capture/status'),{cache:'no-store'});const snapshot=await response.json();
+        setStatus(snapshot);setRecording(snapshot.hr?.recording||null);setLiveSession(snapshot.session);
+        if(snapshot.hr?.recording?.active && snapshot.session?.active){setLaunchState(prev=>({...prev,busy:false,error:'',message:'OBS and Sarah session recording confirmed.'}));return;}
+        await wait(400);
+      }
+      throw Error('OBS/Sarah did not confirm recording. Check OBS before proceeding; live heart rate alone does not mean a session is recording.');
+    }catch(error){setLaunchState(prev=>({...prev,busy:false,error:error.message}));}
+  };
+
   const setLaunchStep = useCallback((label, state = "active") => {
     setLaunchState((prev) => {
       const labels = ["Restoring setup", "Preparing voice", "Connecting H10", "Waiting for heart rate", "Verifying raw sensors", "Checking OBS", "Starting session", "Live"];
@@ -7381,7 +7436,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
               </section>
             )}
 
-            <div className="media-live-pressure"><CivetLiveCard live={civet} compact onSetup={() => setCivetSetupOpen(true)} /></div>
+            <div className="media-live-pressure" hidden={!civetEnabled}><CivetLiveCard live={civet} compact onSetup={() => {setCivetEnabled(true);setCivetSetupOpen(true);}} /></div>
 
             <TrendPanel title="HR Trend" empty={!hasHrTrend} heightClass="h-64" distanceView fill={focusView} compactHeading>
               <ResponsiveContainer width="100%" height="100%">
@@ -7727,7 +7782,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           receipt={bpCapture.lastCuffReceipt} sessionReading={displayedBp} deliveryPending={bpCapture.cuffDeliveryPending}
           onToggle={toggleOmronBloodPressureListener} onChoose={()=>startOmronBloodPressureListenerForLiveSession({forceDevicePicker:true})} onDiagnostics={copyCuffDiagnostics}/>
         <div className="flex flex-wrap items-center gap-3"><strong>CIVET</strong><span>{civet.latest?'Receiving live pressure':civet.connected?'Bluetooth connected · waiting for pressure':'No fresh pressure signal'}</span>
-          <button className="rounded-lg border border-primary/40 px-3 py-2" onClick={()=>setCivetSetupOpen(true)}>CIVET · connect &amp; calibrate</button></div>
+          <button className="rounded-lg border border-primary/40 px-3 py-2" onClick={()=>{setCivetEnabled(true);setCivetSetupOpen(true);}}>CIVET · connect &amp; calibrate</button></div>
         <p className="text-sm text-muted-foreground">Arduino EMG still requires its computer USB helper. It is not a phone-acquired sensor in this build.</p>
       </section>}
       {!focusView && isNativeSarah() && !phoneOnly && <section className="rounded-xl border border-border bg-card p-3 text-sm" aria-label="Capture workflow">
@@ -7754,10 +7809,10 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         message={bpCapture.error || bpCapture.cuffConnectionMessage || (bpOmronListening ? "Waiting for cuff." : "Cuff disconnected.")}
         error={Boolean(bpCapture.error || bpCapture.cuffDeliveryPending)} receipt={bpCapture.lastCuffReceipt} sessionReading={latestBpReading} deliveryPending={bpCapture.cuffDeliveryPending}
         onToggle={toggleOmronBloodPressureListener} onChoose={() => startOmronBloodPressureListenerForLiveSession({forceDevicePicker:true})} onDiagnostics={copyCuffDiagnostics} />}
-      <CivetLiveAlert live={civet} onSetup={() => setCivetSetupOpen(true)} />
+      <CivetLiveAlert live={civet} enabled={civetEnabled} onDisable={()=>setCivetEnabled(false)} onSetup={() => {setCivetEnabled(true);setCivetSetupOpen(true);}} />
       {civetSetupOpen && <CivetSetup live={civet} onClose={() => setCivetSetupOpen(false)} />}
       {emgSetupOpen && <EmgSetup onClose={() => setEmgSetupOpen(false)} onProfileChange={names => { if(names) setEmgNames(names); }} onConnected={() => updateTelemetryPanel("emg", { enabled: true })} />}
-      {!focusView && showAdvancedSetupConsole && <div className="flex flex-wrap items-center gap-3"><button type="button" className="rounded-lg border border-primary px-4 py-2" onClick={() => setCivetSetupOpen(true)}>Pelvic pressure · setup</button><button type="button" className="rounded-lg border border-primary px-4 py-2" onClick={() => setEmgSetupOpen(true)}>EMG · setup & sensor names</button><span className="text-sm text-muted-foreground">{!emgSetupStatus?'EMG status unavailable':emgSetupStatus.receiving?'EMG receiving live samples':emgSetupStatus.running?'EMG helper running · waiting for samples':emgSetupStatus.installed?'EMG helper installed · stopped':'EMG helper setup needed'}</span></div>}
+      {!focusView && showAdvancedSetupConsole && <div className="flex flex-wrap items-center gap-3"><button type="button" className="rounded-lg border border-primary px-4 py-2" onClick={() => {setCivetEnabled(true);setCivetSetupOpen(true);}}>Pelvic pressure · setup</button><button type="button" className="rounded-lg border border-primary px-4 py-2" onClick={() => setEmgSetupOpen(true)}>EMG · setup & sensor names</button><span className="text-sm text-muted-foreground">{!emgSetupStatus?'EMG status unavailable':emgSetupStatus.receiving?'EMG receiving live samples':emgSetupStatus.running?'EMG helper running · waiting for samples':emgSetupStatus.installed?'EMG helper installed · stopped':'EMG helper setup needed'}</span></div>}
       {hrLossDialog && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4">
           <div
@@ -8061,7 +8116,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         </div>
       )}
 
-      {!focusView && !phoneOnly && (
+      {!focusView && !phoneOnly && captureTab==='devices' && (
         <label className="inline-flex items-center gap-2 text-sm font-medium">
           Record as
           <select aria-label="Capture type" className="rounded-md border border-border bg-card px-3 py-2" value={captureKind} disabled={phoneCaptureBusy || Boolean(liveSession?.active)}
@@ -8086,14 +8141,15 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       </div>}
 
       {!focusView && captureTab === "session" && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" onClick={() => setCaptureTab("camera")}>Open Camera &amp; Telemetry Capture</Button>
-          <Button type="button" variant="outline" aria-expanded={obsWorkflow} disabled={phoneCaptureBusy}
-            onClick={() => setObsWorkflow(value => !value)}>{obsWorkflow ? "Hide external recorder" : "External recorder setup"}</Button>
-        </div>
+        <LiveSessionConsole recording={recording} session={liveSession} camera={cameraCapture}
+          captureKind={liveSession?.active?liveSession.captureKind:captureKind} onKindChange={setCaptureKind}
+          title={sessionTitle} notes={sessionNotes} onTitleChange={setSessionTitle} onNotesChange={setSessionNotes}
+          onSave={saveSessionDetails} onStart={startSessionRecording} onCamera={()=>setCaptureTab('camera')}
+          busy={launchState.busy} error={launchState.error||captureKindError} metadataStatus={sessionDetailsStatus}
+          hrReady={h10Recent} civetEnabled={civetEnabled} onCivetChange={setCivetEnabled}/>
       )}
 
-      {!focusView && obsWorkflow && !phoneCaptureBusy && captureTab === "session" && !launchActive && (
+      {!focusView && obsWorkflow && !phoneCaptureBusy && captureTab === "devices" && !launchActive && (
         <LiveCaptureLaunchpad
           setupSummary={launchSetupSummary}
           readiness={launchReadiness}
@@ -9772,7 +9828,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         error={Boolean(bpCapture.error || bpCapture.cuffDeliveryPending)} receipt={bpCapture.lastCuffReceipt} sessionReading={latestBpReading} deliveryPending={bpCapture.cuffDeliveryPending}
         onToggle={toggleOmronBloodPressureListener} onChoose={() => startOmronBloodPressureListenerForLiveSession({forceDevicePicker:true})} onDiagnostics={copyCuffDiagnostics} />
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <button type="button" onClick={() => setCivetSetupOpen(true)} className="min-h-11 rounded-lg border border-primary/40 px-3 text-sm font-semibold">Connect CIVET</button>
+            <button type="button" onClick={() => {setCivetEnabled(true);setCivetSetupOpen(true);}} className="min-h-11 rounded-lg border border-primary/40 px-3 text-sm font-semibold">Connect CIVET</button>
             <button type="button" onClick={() => setEmgSetupOpen(true)} className="min-h-11 rounded-lg border border-primary/40 px-3 text-sm font-semibold">Connect EMG</button>
             <span className={`${distanceTelemetryView ? "text-sm" : "text-[10px]"} text-muted-foreground`}>
               HR {fmtTime(status?.hr?.lastMessageAt)}{telemetryEmgLive ? ` · EMG ${fmtTime(status?.emg?.lastMessageAt || status?.emg?.lastPollAt)}` : ""}
@@ -10403,7 +10459,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         </TrendPanel>
         </div>)}
 
-        {telemetryPanelEnabled("civet") && (civet.latest || civet.history?.length > 0) && renderTelemetryDashboardPanel("civet", <div className="h-full min-h-0" style={{ minHeight: focusView ? 0 : 420 }}><CivetLiveCard live={civet} onSetup={() => setCivetSetupOpen(true)} /></div>)}
+        {civetEnabled && telemetryPanelEnabled("civet") && (civet.latest || civet.history?.length > 0) && renderTelemetryDashboardPanel("civet", <div className="h-full min-h-0" style={{ minHeight: focusView ? 0 : 420 }}><CivetLiveCard live={civet} onSetup={() => {setCivetEnabled(true);setCivetSetupOpen(true);}} /></div>)}
         {telemetryPanelEnabled("emg") && telemetryEmgLive && (
           renderTelemetryDashboardPanel("emg", <div className="h-full min-h-0" style={{ order: telemetryPanelOrder("emg") }}><TrendPanel title={selectedEmgConfig.trendTitle} subtitle={selectedEmgConfig.trendSubtitle} empty={!hasEmgTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-64 md:h-72"} distanceView={distanceTelemetryView} fill={focusView}>
             <ResponsiveContainer width="100%" height="100%">

@@ -4,10 +4,10 @@ import {loadTTSSettings} from './TTSButton';
 import './civetLive.css';
 const phrase='CIVET needs attention. Please check the pressure sensor display.';
 const phrases={sensor:[phrase]};
-export default function CivetLiveAlert({live,onSetup}) {
+export default function CivetLiveAlert({live,onSetup,enabled=true,onDisable}) {
   const [muted,setMuted]=useState(false),[ack,setAck]=useState(false);
   const voice=useMemo(()=>({...loadTTSSettings(),volume:.75}),[]);
-  const active=!!live.history?.length;
+  const active=enabled && !!live.latest && live.state==='connected';
   const state=live.latest?.acquisition_state;
   const problem=active&&(!live.latest||['recalibrate','checking','recovering'].includes(state));
   const audio=useLiveCueAudio({phrases,settings:voice,enabled:active&&!muted});
@@ -22,5 +22,5 @@ export default function CivetLiveAlert({live,onSetup}) {
   },[problem,muted,audio]);
   if(!problem)return null;
   return <aside className="civet-live-alert" role="alert"><p><b>CIVET: {live.latest?.acquisition_message||'No fresh pressure signal. Check Bluetooth and sensor.'}</b></p>{!ack&&<><small>Raw samples are saved when received. Relative intensity and hold duration may be unavailable.</small><small>{muted?'Spoken alert muted':!audio.ready?'Spoken alert not ready — use Enable / test sound':'Spoken alert enabled'}</small></>}
-    <div className="civet-live-alert-controls"><button onClick={onSetup}>Check / recalibrate</button><button onClick={()=>{setMuted(false);audio.testVoice().catch(()=>{});}}>Enable / test sound</button><button onClick={()=>{setMuted(v=>!v);audio.stop();}}>{muted?'Unmute':'Mute alert'}</button>{!ack&&<button onClick={()=>setAck(true)}>Understood</button>}</div></aside>;
+    <div className="civet-live-alert-controls"><button onClick={onSetup}>Check / recalibrate</button>{onDisable&&<button onClick={()=>{audio.stop();onDisable();}}>Not using CIVET this session</button>}<button onClick={()=>{setMuted(false);audio.testVoice().catch(()=>{});}}>Enable / test sound</button><button onClick={()=>{setMuted(v=>!v);audio.stop();}}>{muted?'Unmute':'Mute alert'}</button>{!ack&&<button onClick={()=>setAck(true)}>Understood</button>}</div></aside>;
 }
