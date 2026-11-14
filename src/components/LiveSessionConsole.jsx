@@ -1,15 +1,16 @@
 import { useState } from 'react';
 
-export function sessionRecordingState({ recording, session, camera }) {
+export function sessionRecordingState({ recording, session, camera, obsConnected=true }) {
   if (camera?.phase === 'recording') return { label: 'RECORDING · phone camera', tone: 'text-red-500', detail: 'Local camera capture is running.' };
+  if(obsConnected===false)return {label:'OBS CONNECTION LOST · recording unconfirmed',tone:'text-amber-500',detail:'OBS may still be recording independently. Sarah cannot confirm its video or session state until the connection returns.'};
   if (recording?.active) return { label: recording.paused ? 'PAUSED · OBS' : 'RECORDING · OBS', tone: recording.paused ? 'text-amber-500' : 'text-red-500', detail: session?.active ? 'Sarah session and telemetry recording are active.' : 'OBS is recording. Sarah session confirmation is pending.' };
   if (session?.importing || camera?.phase === 'saving') return { label: 'SAVING · recording has stopped', tone: 'text-amber-500', detail: 'Wait for finalization before starting another session.' };
   return { label: 'NOT RECORDING', tone: 'text-muted-foreground', detail: session?.active ? 'Sarah has an open record, but OBS is not recording video.' : 'Live heart rate is monitoring only. No session is being recorded.' };
 }
 
-export default function LiveSessionConsole({ recording, session, camera, captureKind, onKindChange, title, notes, onTitleChange, onNotesChange, onSave, onStart, onCamera, busy, error, metadataStatus, hrReady, civetEnabled, onCivetChange }) {
+export default function LiveSessionConsole({ recording, session, camera, obsConnected=true, captureKind, onKindChange, title, notes, onTitleChange, onNotesChange, onSave, onStart, onCamera, busy, error, metadataStatus, hrReady, civetEnabled, onCivetChange }) {
   const [saving,setSaving]=useState(false);
-  const state=sessionRecordingState({recording,session,camera});
+  const state=sessionRecordingState({recording,session,camera,obsConnected});
   const active=!!(recording?.active||session?.active||camera?.phase==='recording');
   return <section className="space-y-4 rounded-2xl border border-border bg-card p-4" aria-label="Session recording">
     <div role="status" aria-live="polite"><h2 className={`text-xl font-bold ${state.tone}`}>{state.label}</h2><p className="text-sm">{state.detail}</p>
@@ -23,7 +24,7 @@ export default function LiveSessionConsole({ recording, session, camera, capture
     <label className="block text-sm font-medium">Session notes<textarea aria-label="Session notes" className="mt-1 w-full rounded-lg border border-border bg-background p-2" value={notes} onChange={e=>onNotesChange(e.target.value)} placeholder="Plans, context, observations…" rows={3}/></label>
     <div className="flex flex-wrap gap-3 text-sm"><span>{hrReady?'H10 / heart rate: receiving':'Heart rate: waiting for fresh readings'}</span><label className="inline-flex items-center gap-2"><input type="checkbox" checked={civetEnabled} onChange={e=>onCivetChange(e.target.checked)}/>Use CIVET pelvic pressure for this session</label></div>
     <div className="flex flex-wrap gap-2">
-      {!active && <button type="button" disabled={busy||session?.importing} onClick={onStart} className="rounded-lg bg-primary px-5 py-3 font-bold text-primary-foreground disabled:opacity-50">{busy?'Starting…':'Start session + OBS recording'}</button>}
+      {!recording?.active && camera?.phase!=='recording' && <button type="button" disabled={busy||session?.importing} onClick={onStart} className="rounded-lg bg-primary px-5 py-3 font-bold text-primary-foreground disabled:opacity-50">{busy?'Starting…':session?.active?'Resume OBS recording':'Start session + OBS recording'}</button>}
       <button type="button" onClick={onCamera} className="rounded-lg border border-border px-3 py-2">Use phone / browser camera instead</button>
       {session?.active && <button type="button" disabled={saving} onClick={async()=>{setSaving(true);try{await onSave();}finally{setSaving(false);}}} className="rounded-lg border border-border px-3 py-2">{saving?'Saving…':'Save session details'}</button>}
     </div>

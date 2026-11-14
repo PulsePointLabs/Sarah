@@ -5827,8 +5827,10 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     try {
       if(!recordingTransportActive){
         if(!obsReady)throw Error('OBS is not connected. Open OBS on the recording computer, or use phone / browser camera instead.');
-        const reply=await fetch(apiUrl('/live-capture/capture-kind'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({captureKind})});
-        if(!reply.ok)throw Error((await reply.json()).error||'Could not set session type.');
+        if(!liveSession?.active){
+          const reply=await fetch(apiUrl('/live-capture/capture-kind'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({captureKind})});
+          if(!reply.ok)throw Error((await reply.json()).error||'Could not set session type.');
+        }else await saveSessionDetails();
         await startFromLaunchpad({allowWithoutRawSensors:true});
         setLaunchState(prev=>({...prev,busy:true,message:'Starting OBS recording…'}));
         let socket=directH10RelaySocketRef.current;
@@ -7769,6 +7771,14 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           </button>
         ))}
       </nav>}
+      {!focusView && captureTab === "session" && (
+        <LiveSessionConsole recording={recording} session={liveSession} camera={displayCameraRecording?{...cameraCapture,phase:'recording'}:cameraCapture} obsConnected={obsReady}
+          captureKind={liveSession?.active?liveSession.captureKind:captureKind} onKindChange={setCaptureKind}
+          title={sessionTitle} notes={sessionNotes} onTitleChange={setSessionTitle} onNotesChange={setSessionNotes}
+          onSave={saveSessionDetails} onStart={startSessionRecording} onCamera={()=>setCaptureTab('camera')}
+          busy={launchState.busy} error={launchState.error||captureKindError} metadataStatus={sessionDetailsStatus}
+          hrReady={h10Recent} civetEnabled={civetEnabled} onCivetChange={setCivetEnabled}/>
+      )}
       {!focusView && phoneOnly && captureTab==='devices' && <section className="space-y-4 rounded-xl border border-border p-4" aria-label="Phone sensor setup">
         <h3 className="font-semibold text-primary">Sensors connected to this phone</h3>
         <p className="text-sm">A session and a server connection are not required for bedside monitoring.</p>
@@ -8140,14 +8150,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         />
       </div>}
 
-      {!focusView && captureTab === "session" && (
-        <LiveSessionConsole recording={recording} session={liveSession} camera={cameraCapture}
-          captureKind={liveSession?.active?liveSession.captureKind:captureKind} onKindChange={setCaptureKind}
-          title={sessionTitle} notes={sessionNotes} onTitleChange={setSessionTitle} onNotesChange={setSessionNotes}
-          onSave={saveSessionDetails} onStart={startSessionRecording} onCamera={()=>setCaptureTab('camera')}
-          busy={launchState.busy} error={launchState.error||captureKindError} metadataStatus={sessionDetailsStatus}
-          hrReady={h10Recent} civetEnabled={civetEnabled} onCivetChange={setCivetEnabled}/>
-      )}
+
 
       {!focusView && obsWorkflow && !phoneCaptureBusy && captureTab === "devices" && !launchActive && (
         <LiveCaptureLaunchpad
