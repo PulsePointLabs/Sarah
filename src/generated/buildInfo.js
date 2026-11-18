@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.310",
-  "commit": "4c09043",
-  "commitMessage": "Expose generated feedback mode in full-screen controls and retain sensible reset defaults",
-  "builtAt": "2026-11-18T01:59:38.180Z"
+  "version": "0.1.311",
+  "commit": "8e3509e",
+  "commitMessage": "Fix telemetry DeX resizing, clean fullscreen and session BP for v0.1.311",
+  "builtAt": "2026-11-18T03:08:08.264Z"
 };
