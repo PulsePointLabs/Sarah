@@ -8,12 +8,12 @@ export function initialPhaseAnnouncementState() {
 }
 export function phaseCandidate(prediction, sample) {
   if (!(Number(sample.hr) > 0) || !(Number(sample.baselineHr) > 0)) return '';
-  if (Number(prediction.controllerConfidence) < 70 || !Number.isFinite(Number(prediction.controllerConfidence))) return '';
+  const confident = Number(prediction.controllerConfidence) >= 70;
   const delta = Number(sample.hr) - Number(sample.baselineHr);
-  if (Number(prediction.recovery) >= 75) return 'recovery';
-  if (!sample.bodyExploration && prediction.buildEligibleForNearClimax && prediction.confirmationCount >= 2 && prediction.nearClimax >= 75) return 'climax_possible';
-  if (!sample.bodyExploration && prediction.plateauScore >= 75) return 'plateau';
-  if (!sample.bodyExploration && sample.buildConfidence >= 75 && prediction.buildDurationSec >= 30 && delta >= 8) return 'sustained_build';
+  if (confident && Number(prediction.recovery) >= 75) return 'recovery';
+  if (confident && !sample.bodyExploration && prediction.buildEligibleForNearClimax && prediction.confirmationCount >= 2 && prediction.nearClimax >= 75) return 'climax_possible';
+  if (confident && !sample.bodyExploration && prediction.plateauScore >= 75) return 'plateau';
+  if (confident && !sample.bodyExploration && sample.buildConfidence >= 75 && prediction.buildDurationSec >= 30 && delta >= 8) return 'sustained_build';
   if (delta >= 8) return 'elevated';
   if (Number.isFinite(delta) && Math.abs(delta) <= 5) return 'baseline';
   return '';

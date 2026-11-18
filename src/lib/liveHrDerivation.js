@@ -46,7 +46,7 @@ export function deriveLiveHrTelemetry(telemetry, derivedHrState, fallbackSource 
   // Direct H10 packets arrive several times per second. Keep a time-based history,
   // not a packet-count history, or a 240-point "8 minute" baseline is really only
   // about one minute and quickly chases a sustained build upward.
-  if (previousRow && now - previousRow.t < 900) rows[rows.length - 1] = nextRow;
+  if (previousRow && Math.floor(now / 1000) === Math.floor(previousRow.t / 1000)) rows[rows.length - 1] = nextRow;
   else rows.push(nextRow);
   const trimmed = rows.slice(-14400);
   derivedHrState.set(source, trimmed);

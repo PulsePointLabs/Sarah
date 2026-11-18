@@ -8,8 +8,8 @@ export default function PhaseAnnouncementControls({ controller, compact = false,
       <button type="button" aria-label="Test phase announcement" onClick={test} disabled={!settings.enabled || audio.status.phase === 'preparing'} className="min-h-11 rounded-lg border px-3 text-sm disabled:opacity-50">{audio.status.phase === 'preparing' ? 'Preparing…' : compact ? 'Test' : 'Test announcement'}</button>
     </div>
     {!compact && <p className="mt-2 text-xs text-muted-foreground">{bodyExploration
-      ? "Announces sustained HR elevation and a return toward baseline. Requires fresh, consistent telemetry. Uses your selected TTS provider for fixed phrases."
-      : "Separate from encouragement. Requires confidence ≥70 and 12 seconds of fresh, consistent telemetry; at least 30 seconds between announcements. Climax remains a possibility, not confirmation. Uses your selected TTS provider; only these fixed phrases are sent for speech."}</p>}
+      ? "Works without recording. Announces sustained HR elevation and a return toward baseline. Requires fresh, consistent telemetry. Uses your selected TTS provider for fixed phrases."
+      : "Separate from encouragement. Works without recording. Requires 12 seconds of fresh, consistent telemetry; inferred phases also require confidence ≥70; at least 30 seconds between announcements. Climax remains a possibility, not confirmation. Uses your selected TTS provider; only these fixed phrases are sent for speech."}</p>}
     {(!compact || settings.enabled) && <p role="status" className="mt-1 text-xs text-muted-foreground">{!settings.enabled ? 'Phase announcements are off on this device.' : audio.status.phase === 'error' ? audio.status.message : audio.audioState !== 'running' ? 'Tap Test announcement to enable audio.' : message || 'Listening for a sustained, high-confidence phase change.'}</p>}
   </section>;
 }

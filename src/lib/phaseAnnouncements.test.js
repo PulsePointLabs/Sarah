@@ -11,7 +11,7 @@ function run(overrides = {}, sampleOverrides = {}, seconds = 12, initial = initi
 test('only sustained high-confidence evidence yields a phase announcement', () => {
   assert.equal(run({}, {}, 11).cue, null);
   assert.equal(run().cue.type, 'sustained_build');
-  assert.equal(run({ controllerConfidence: 69 }).cue, null);
+  assert.equal(run({ controllerConfidence: 69 }).cue.type, 'elevated');
   assert.equal(run({}, { enabled: false }).cue, null);
   assert.equal(run({}, { active: false }).cue, null);
   assert.equal(run({}, { hr: null }).cue, null);
@@ -40,4 +40,11 @@ test('successful speech is transition-only and cooldown survives changes', () =>
   assert.equal(run({}, {}, 60, accepted, 113000).cue, null);
   assert.equal(run({ plateauScore: 80 }, {}, 12, accepted, 113000).cue, null);
   assert.equal(run({ plateauScore: 80 }, {}, 30, accepted, 113000).cue.type, 'plateau');
+});
+
+
+test('body-exploration HR observations do not depend on sexual-threshold confidence',()=>{
+  assert.equal(run({controllerConfidence:25},{bodyExploration:true}).cue.type,'elevated');
+  assert.equal(run({controllerConfidence:25},{bodyExploration:true,hr:76}).cue.type,'baseline');
+  assert.notEqual(run({controllerConfidence:25,nearClimax:99,buildEligibleForNearClimax:true}).cue.type,'climax_possible');
 });

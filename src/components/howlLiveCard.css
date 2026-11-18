@@ -12,3 +12,11 @@
 .howl-live-modal{position:fixed;inset:0;z-index:120;display:flex;flex-direction:column;gap:10px;padding:20px;background:#07131bf7;color:white;overflow:hidden}
 .howl-live-close{align-self:flex-end;font-size:16px;border:1px solid #62cabc;padding:8px 20px;border-radius:8px}
 .howl-live-expanded-card{flex:1;font-size:clamp(14px,2vw,24px)}
+
+.howl-live-level strong{font-variant-numeric:tabular-nums;min-width:2ch}
+.howl-level-track{height:6px;flex:none;background:#29444e;border-radius:4px;overflow:hidden}
+.howl-level-track>div{height:100%;background:var(--channel-color);transition:width .2s linear}
+.howl-channel-label [data-output-state=on]::before{content:'●';margin-right:5px}
+
+.howl-live-card[data-stale=true] .howl-live-level,.howl-live-card[data-stale=true] .howl-level-track{opacity:.55}
+.howl-live-card[data-stale=true] header span{color:#e8be83}

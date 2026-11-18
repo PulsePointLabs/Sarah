@@ -415,7 +415,7 @@ const PERINEAL_EMG_PROTOCOL_PHASES = [
     captureKey: "baseline",
   },
 ];
-const HOWL_TELEMETRY_POLL_MS = 2500;
+const HOWL_TELEMETRY_POLL_MS = 1000;
 const BLOOD_PRESSURE_SYNC_POLL_MS = 10000;
 const ACTIVE_SESSION_REFRESH_MS = 5000;
 const HEARTBEAT_PREDICTION_STALE_MS = 2600;
@@ -2274,7 +2274,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           );
         }
       }
-      setHowlTelemetry(resolvedTelemetry);
+      setHowlTelemetry(previous=>!resolvedTelemetry||Date.parse(previous?.measured_at||'')>Date.parse(resolvedTelemetry.measured_at||'')?previous:resolvedTelemetry);
       setHowlCapabilities(capabilities);
       if (liveStatus?.ok) {
         const reportedActivity = HOWL_ACTIVITY_MODES.find((mode) => mode.name === liveStatus.howl?.activity_name);
@@ -2515,7 +2515,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         howlIntensity: readHowlChannelIntensity(howlTelemetry, howlCommandForm.channel),
       });
       const previous = prev[prev.length - 1];
-      const replaceCurrentBucket = Boolean(previous && point.ts - previous.ts < 900);
+      const replaceCurrentBucket = Boolean(previous && Math.floor(point.ts / 1000) === Math.floor(previous.ts / 1000));
       const historyForPrediction = replaceCurrentBucket ? [...prev.slice(0, -1), point] : [...prev, point];
       const pointPrediction = computeLiveClimaxPrediction(nextHr, nextEmg, historyForPrediction, {
         sessionTimeSec: point.sessionTimeSec,
@@ -3890,11 +3890,23 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   }, [emgSensorConfig]);
 
   useEffect(() => {
-    refreshHowlTelemetry({ quiet: true });
-    const timer = window.setInterval(() => {
-      refreshHowlTelemetry({ quiet: true });
-    }, HOWL_TELEMETRY_POLL_MS);
-    return () => window.clearInterval(timer);
+    let stopped=false,timer;
+    const controller=new AbortController();
+    const poll=async()=>{
+      try {
+        const response=await fetch(apiUrl('/howl/control/status'),{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(4500)])});
+        const live=await response.json();
+        if(!stopped&&response.ok&&live.ok&&live.howl){
+          const sample={...live.howl,source:'howl_status',measured_at:live.measured_at,received_at:new Date().toISOString(),raw:live.raw};
+          setHowlTelemetry(previous=>Date.parse(previous?.measured_at||'')>Date.parse(sample.measured_at)?previous:sample);
+          for(const channel of ['a','b'])howlChannelControllerRef.current[channel]=observeHowlIntensity(howlChannelControllerRef.current[channel],readHowlChannelIntensity(sample,channel));
+        }
+      } catch { /* Keep the last reported level; freshness marks a lost connection. */ }
+      if(!stopped)timer=window.setTimeout(poll,HOWL_TELEMETRY_POLL_MS);
+    };
+    refreshHowlTelemetry({quiet:true});poll();
+    const details=window.setInterval(()=>refreshHowlTelemetry({quiet:true}),30000);
+    return()=>{stopped=true;controller.abort();window.clearTimeout(timer);window.clearInterval(details);};
   }, [refreshHowlTelemetry]);
 
   useEffect(() => {
@@ -3983,10 +3995,10 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const hasRecentHrPacket = useCallback(() => {
     const sample = latestHrRef.current || hrTelemetry;
     const hr = readNumber(sample?.currentHr, sample?.hr, sample?.heartRate);
-    if (hr == null) return false;
-    const stamp = sample?.engineReceivedAt || sample?.receivedAt || sample?.lastMessageAt || sample?.measuredAt || sample?.source_at;
+    if (hr == null || sample?.quality?.stale) return false;
+    const stamp = sample?.measuredAt || sample?.engineReceivedAt || sample?.receivedAt || sample?.lastMessageAt || sample?.measuredAt || sample?.source_at;
     const ageMs = stamp ? Date.now() - timestampMs(stamp) : 0;
-    return !stamp || (
+    return Boolean(stamp) && (
       Number.isFinite(ageMs)
       && ageMs >= -5000
       && ageMs < SHARED_HR_PACKET_STALE_MS
@@ -4259,7 +4271,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const hrChange30s = priorObservation && displayedHr != null ? displayedHr - priorObservation.hr : null;
   const procedureRecord = phoneCaptureRef.current || (liveSession?.active ? activeSessionDoc : null);
   const procedureEvents = procedureRecord?.event_timeline || [];
-  const loggedInstilledMl = sumEnemaInstilledVolume(procedureEvents);
+
   const monitoringHelper = status?.monitoring?.paused && !cameraRecording ? "Recording paused"
     : !recentHrPacket ? "Waiting for fresh heart-rate data"
     : serverPredictionReady ? status.monitoring.mode === "passive" ? "Passive physiology monitoring" : "Live session monitoring"
@@ -4770,15 +4782,15 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const [telemetryPreset,setTelemetryPreset]=useState(()=>localStorage.getItem("sarah.telemetry.preset")||"custom");
   const applyTelemetryPreset = name => {
     setTelemetryPreset(name);localStorage.setItem("sarah.telemetry.preset",name);
-    const panels={balanced:['vitals','cardiac','phase','howl'],cardiac:['vitals','cardiac'],response:['vitals','phase','threshold','civet'],bedside:['vitals'],device:['vitals','civet','howl']}[name];
-    if(!panels)return;
-    setTelemetryDashboard(defaultTelemetryDashboard().map(panel=>({...panel,enabled:panels.includes(panel.id)})));
+    const panels = name === 'bedside' ? ['vitals'] : ['vitals','cardiac','phase','threshold','civet','howl'];
+    setTelemetryDashboard(previous => defaultTelemetryDashboard().map(panel => ({...panel,enabled:panels.includes(panel.id)||Boolean(previous.find(p=>p.id===panel.id)?.enabled && !['respiratory','engine'].includes(panel.id))})));
     const hide=['metric:Respiration','metric:Chest Motion','metric:RR Samples'];
-    if(name==='cardiac'||name==='bedside')hide.push('metric:Near-Climax Watch','metric:HR change');
     if(name==='bedside')hide.push('metric:SDNN','metric:Below recent peak','metric:Recovery');
-    if(name==='device')hide.push('metric:Blood Pressure','metric:Near-Climax Watch','metric:RMSSD','metric:SDNN','metric:HR change','metric:HR response','metric:Recovery','metric:Below recent peak');
     setHiddenTelemetryItems(hide);setSelectedTelemetryPanel('');setTelemetryControlsOpen(false);
-    window.dispatchEvent(new Event('telemetry-layout-reset'));
+    const weights = name==='device' ? {civet:{widthWeight:1.8,heightWeight:3},howl:{heightWeight:2}}
+      : name==='cardiac' ? {cardiac:{widthWeight:1.6,heightWeight:3}}
+      : name==='response' ? {threshold:{heightWeight:2.5},phase:{heightWeight:1.4}} : {};
+    window.dispatchEvent(new CustomEvent('telemetry-layout-reset',{detail:weights}));
   };
 
   useEffect(()=>{
@@ -5750,6 +5762,8 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
 
   useEffect(()=>{localStorage.setItem('sarah.encouragement.mode',liveCueSettings.generationMode||'generated');},[liveCueSettings.generationMode]);
 
+  const voiceMonitoringActive = Boolean(recentHrPacket && !recordingPaused && !status?.monitoring?.paused);
+  const voiceObservationId = liveSession?.activeSessionId || phoneCaptureRef.current?.id || `monitor:${localObservationRef.current.startedAt || status?.monitoring?.observationStartedAt || "live"}`;
   const liveCuePhraseBank = useMemo(
     () => resolveLiveCuePhraseBank(liveCueSettings, { captureKind }),
     [captureKind, liveCueSettings],
@@ -5760,19 +5774,19 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     enabled: liveCueSettings.enabled,
   });
   const phaseAnnouncements = usePhaseAnnouncements({
-    prediction, voiceSettings: liveCuePhraseBank.settings, sessionId: liveSession?.activeSessionId,
+    prediction: monitoringPrediction, voiceSettings: liveCuePhraseBank.settings, sessionId: voiceObservationId,
     microphoneActive: annotationRecording,
-    sample: { active: recordingActive, measuredAt: Number(hrTelemetry?.measuredAt || hrTelemetry?.receivedAt),
+    sample: { active: voiceMonitoringActive, measuredAt: timestampMs(hrTelemetry?.measuredAt || hrTelemetry?.receivedAt),
       hr: hrTelemetry?.currentHr, baselineHr: hrTelemetry?.baselineHr, buildConfidence: hrTelemetry?.buildConfidence,
       bodyExploration: captureIsBodyExploration },
   });
   const liveCueEngine = useLiveCueEngine({
-    active: recordingActive || cameraRecording,
+    active: voiceMonitoringActive,
     captureKind,
     cueSettings: liveCueSettings,
     audio: liveCueAudio,
-    sessionId: liveSession?.activeSessionId,
-    getSessionTime: getCurrentSessionTime,
+    sessionId: voiceObservationId,
+    getSessionTime: () => recordingActive || cameraRecording ? getCurrentSessionTime() : telemetryHistory.at(-1)?.sessionTimeSec || 0,
     microphoneActive: annotationRecording,
     onTimelineEvent: (event) => {
       const finalEvent = {
@@ -5784,7 +5798,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         category: event.type,
         metadata: event.metadata,
       };
-      appendLiveSessionEvents(finalEvent).catch(() => {});
+      if (recordingActive || cameraRecording) appendLiveSessionEvents(finalEvent).catch(() => {});
     },
   });
 
@@ -5818,7 +5832,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   }, [liveCueAudio.testVoice, toast]);
 
   useEffect(() => {
-    if (!recordingActive || !liveCueSettings.enabled || liveCueAudio.status.phase !== "idle") return;
+    if (!voiceMonitoringActive || !liveCueSettings.enabled || liveCueAudio.status.phase !== "idle") return;
     liveCueAudio.prepare().catch((error) => {
       toast({
         title: "Sarah encouragement is unavailable",
@@ -5826,7 +5840,17 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         variant: "destructive",
       });
     });
-  }, [liveCueAudio, liveCueSettings.enabled, recordingActive, toast]);
+  }, [liveCueAudio, liveCueSettings.enabled, voiceMonitoringActive, toast]);
+
+  useEffect(() => {
+    const enableAudio = () => {
+      if (liveCueSettings.enabled) liveCueAudio.unlock().catch(() => {});
+      if (phaseAnnouncements.settings.enabled) phaseAnnouncements.audio.unlock().catch(() => {});
+    };
+    document.addEventListener('pointerdown',enableAudio);
+    document.addEventListener('keydown',enableAudio);
+    return () => { document.removeEventListener('pointerdown',enableAudio);document.removeEventListener('keydown',enableAudio); };
+  },[liveCueSettings.enabled,liveCueAudio.unlock,phaseAnnouncements.settings.enabled,phaseAnnouncements.audio.unlock]);
 
   const waitForRecentHrPacket = useCallback((timeoutMs = 25000) => new Promise((resolve) => {
     const started = Date.now();
@@ -6026,7 +6050,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
               ? `Telemetry is armed; waiting for OBS. Sarah voice is temporarily unavailable: ${voiceWarning}`
             : voiceReadyForLaunch || !liveCueSettings.enabled
               ? recordingActive ? "Session live." : "Telemetry is live. Start recording in OBS when you are ready."
-              : recordingActive ? "Session live without voice cues." : "Telemetry is live and waiting for OBS; voice cues will stay quiet until recording starts.",
+              : recordingActive ? "Session live without voice cues." : "Telemetry monitoring is live. Voice cues can run without recording.",
         }));
         return sessionState;
       } catch (error) {
@@ -6336,16 +6360,18 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   }, [buildLevel, captureIsBodyExploration, getCurrentSessionTime, prediction, recordingActive, telemetryHistory]);
 
   useEffect(() => {
-    if ((!recordingActive && !cameraRecording) || !telemetryHistory.length || !hrTelemetry) return;
-    liveCueEngine.step(prediction, {
+    if (!voiceMonitoringActive || !telemetryHistory.length || !hrTelemetry) return;
+    liveCueEngine.step(monitoringPrediction, {
       hr: readNumber(hrTelemetry?.currentHr, hrTelemetry?.hr, hrTelemetry?.heartRate),
       baselineHr: readNumber(hrTelemetry?.baselineHr, hrTelemetry?.baseline_hr),
-      recentSlope: prediction.recentSlope,
+      measuredAt: timestampMs(hrTelemetry.measuredAt || hrTelemetry.receivedAt),
+      hrvRmssd: hrvRmssd, hrvSdnn: hrvSdnn,
+      recentSlope: monitoringPrediction.recentSlope,
       emgContribution: readNumber(emgTelemetry?.left_pct, emgTelemetry?.level_pct) != null ? 1 : 0,
       hasMultipleSignalFamilies: Boolean(prediction.hrvUsable || emgTelemetry),
       sessionTimeSec: getCurrentSessionTime(),
     });
-  }, [cameraRecording, emgTelemetry, getCurrentSessionTime, hrTelemetry, liveCueEngine.step, prediction, recordingActive, telemetryHistory.length]);
+  }, [cameraRecording, emgTelemetry, getCurrentSessionTime, hrTelemetry, hrvRmssd, hrvSdnn, liveCueEngine.step, monitoringPrediction, voiceMonitoringActive, telemetryHistory.length]);
 
   useEffect(() => {
     const cue = liveCueEngine.latestCue;
@@ -6354,11 +6380,11 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   }, [liveCueEngine.latestCue]);
 
   useEffect(() => {
-    if (recordingActive) return;
+    if (voiceMonitoringActive) return;
     setLatestTelemetryNotice(null);
     lastPhaseMarkerRef.current = { label: "", ts: 0 };
     liveCueEngine.reset();
-  }, [liveCueEngine.reset, recordingActive]);
+  }, [liveCueEngine.reset, voiceMonitoringActive]);
 
   const getAudioContext = useCallback(async () => {
     if (!audioContextRef.current || audioContextRef.current.state === "closed") {
@@ -7083,7 +7109,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       </div>
       <div className="mt-3 rounded-lg border border-border bg-muted/25 px-3 py-2">
         <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {captureIsBodyExploration ? "Say “Sarah”, wait for the tone, then dictate a procedure note. Say “60 milliliters instilled” to log rectal fluid, or “undo last” to remove the last note."
+          {captureIsBodyExploration ? "Say “Sarah”, wait for the tone, then dictate a procedure note. Say “undo last” to remove the last note."
               : "Commands: “Sarah”, “end”, “undo last”, “mark climax”, “Sarah set Howl intensity to 10”, “Sarah switch to milkmaster mode”"}
         </p>
       </div>
@@ -9847,7 +9873,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         } : undefined}
       >
         {telemetryCleanFullscreen&&<div className="telemetry-minimal-clock"><button aria-label="Show full-screen controls" title="Tap time to edit or exit full screen" onClick={()=>setTelemetryChromeVisible(true)}><time>{new Date(liveHealthNowMs).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</time><span aria-label="Session elapsed">{cameraRecording?fmtMmSs(getCurrentSessionTime()):launchActive&&resolveLiveSessionStartMs()?fmtMmSs(Math.max(0,(liveHealthNowMs-resolveLiveSessionStartMs())/1000)):'00:00'}</span></button></div>}
-        <div hidden={telemetryCleanFullscreen} className="flex shrink-0 items-center gap-2 px-1 text-sm" aria-label="Telemetry presets"><label>View <select aria-label="Telemetry view preset" className="rounded border border-border bg-card px-2 py-1" value={telemetryPreset} onChange={e=>applyTelemetryPreset(e.target.value)}><option value="custom" disabled>Choose preset</option><option value="balanced">Balanced</option><option value="cardiac">Cardiac focus</option><option value="response">Physiological response</option><option value="bedside">Large bedside numbers</option><option value="device">Pressure + Howl</option></select></label></div>
+        <div hidden={telemetryCleanFullscreen} className="flex shrink-0 items-center gap-2 px-1 text-sm" aria-label="Telemetry presets"><label>View <select aria-label="Telemetry view preset" className="rounded border border-border bg-card px-2 py-1" value={telemetryPreset} onChange={e=>applyTelemetryPreset(e.target.value)}><option value="custom" disabled>Choose preset</option><option value="balanced">Balanced</option><option value="cardiac">Cardiac focus</option><option value="response">Physiological response</option><option value="bedside">Large bedside numbers</option><option value="device">Pelvic pressure focus</option></select></label></div>
         <div data-telemetry-header hidden={telemetryCleanFullscreen} className={`relative flex min-w-0 flex-wrap items-center justify-between gap-3 ${telemetryFocusView ? "shrink-0 pb-2 z-30" : ""}`}>
           <h3 className={`${telemetryFocusView ? "text-base md:text-xl" : distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex min-w-0 flex-wrap items-center gap-2`}>
             <CircleDot className={distanceTelemetryView ? "w-6 h-6" : "w-4 h-4"} /> Live Telemetry
@@ -10132,7 +10158,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         {telemetryPanelEnabled("howl") && renderTelemetryDashboardPanel("howl", <HowlLiveCard sample={howlTelemetry} onControls={()=>setHowlQuickModalOpen(true)}/>)}
 
         {telemetryPanelEnabled("vitals") && renderTelemetryDashboardPanel("vitals", <div className={focusView ? "telemetry-vitals-grid h-full min-h-0 gap-2 overflow-hidden" : `grid h-full min-h-0 auto-rows-fr grid-cols-2 gap-2 overflow-hidden sm:grid-cols-3 ${telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`} style={{ order: telemetryPanelOrder("vitals") }}>
-          <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(displayedHr, 0)} helper="beats per minute" active={displayedHr != null} level={currentHrLevel} trendValues={telemetryTrendValues(telemetryHistory, "hr", displayedHr)} large display={focusView} beatPulse={visibleHeartbeatPulseId} />
+          <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(displayedHr, 0)} helper={recentHrPacket ? "Live H10 / heart-rate feed" : "Signal stale · check sensor connection"} active={displayedHr != null} level={currentHrLevel} trendValues={telemetryTrendValues(telemetryHistory, "hr", displayedHr)} large display={focusView} beatPulse={visibleHeartbeatPulseId} />
           <MetricCard icon={<Activity className="w-4 h-4" />} label="Blood Pressure" value={latestBpValue} helper={latestBpHelper} active={Boolean(displayedBp)} valueClassName={focusView ? "!text-[clamp(1.75rem,2.8vw,4rem)]" : "!text-[clamp(2rem,8vw,3rem)]"} large display={focusView} />
           {!captureIsBodyExploration && (
             <>
@@ -10140,7 +10166,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
                 icon={<Brain className="w-4 h-4" />}
                 label="Near-Climax Watch"
                 value={displayedNearClimax == null ? "--" : `${fmtNumber(displayedNearClimax, 0)}%`}
-                helper={`${monitoringHelper} · ${nearClimaxEpisodeCount} high-probability episode${nearClimaxEpisodeCount === 1 ? "" : "s"}`}
+                helper={`${monitoringHelper} · ${monitoringPrediction.nearClimaxBeforeCaps > monitoringPrediction.nearClimaxAfterCaps ? `Gated: ${monitoringPrediction.buildDurationSec}s build, ${monitoringPrediction.confirmationCount} supporting cues` : monitoringPrediction.confidenceBand} · ${nearClimaxEpisodeCount} high-probability episode${nearClimaxEpisodeCount === 1 ? "" : "s"}`}
                 active={displayedNearClimax >= 42}
                 level={displayedNearClimax}
                 trendValues={telemetryTrendValues(telemetryHistory, "nearClimax", displayedNearClimax)}
@@ -10221,8 +10247,8 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
             <div className="telemetry-procedure-stats mt-1 grid grid-cols-2 gap-1 text-sm">
               <div className="rounded-lg border border-border p-3"><span className="text-muted-foreground">HR from baseline</span>
                 <p className="text-xl font-semibold">{hrResponseDelta == null ? "--" : `${hrResponseDelta > 0 ? "+" : ""}${fmtNumber(hrResponseDelta, 0)} bpm`}</p></div>
-              <div className="rounded-lg border border-border p-3"><span className="text-muted-foreground">Rectal fluid logged</span>
-                <p className="text-xl font-semibold">{loggedInstilledMl > 0 ? formatMilliliters(loggedInstilledMl) : "--"}</p></div>
+              <div className="rounded-lg border border-border p-3"><span className="text-muted-foreground">HR change · 30 seconds</span>
+                <p className="text-xl font-semibold">{hrChange30s == null ? "--" : `${hrChange30s > 0 ? "+" : ""}${fmtNumber(hrChange30s, 0)} bpm`}</p></div>
             </div>
             <p className="mt-3 text-sm text-muted-foreground">{procedureRecord ? "Mark observations during the recording." : "Start a capture to timestamp procedure observations."}</p>
             <div className="mt-2 flex flex-wrap gap-2">

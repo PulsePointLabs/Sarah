@@ -1,4 +1,4 @@
-const number=(...values)=>values.find(v=>typeof v==='number'&&Number.isFinite(v))??null;
+const number=(...values)=>{for(const value of values)if(value!==''&&value!=null&&typeof value!=='boolean'&&Number.isFinite(Number(value)))return Number(value);return null;};
 export function howlLiveView(sample,now=Date.now()){
   const at=Date.parse(sample?.measured_at||sample?.received_at||'');
   const fresh=sample?.connected!==false&&sample?.connection_state!=='disconnected'&&Number.isFinite(at)&&now-at<6500&&now-at>=-1000;
@@ -9,9 +9,10 @@ export function howlLiveView(sample,now=Date.now()){
       const channel=sample?.channel_state?.[key]||sample?.channels?.[key]||raw.channels?.[key]||{};
       const power=number(sample?.[`power_${key}`],options[`power_${key}`],channel.intensity);
       const current=number(channel.current_ma,raw[`current_${key}_ma`]);
-      const active=channel.output_active??channel.current_active??null;
+      const reported=channel.output_active??channel.current_active;
+      const active=reported===true||reported===1||reported==='true'?true:reported===false||reported===0||reported==='false'?false:null;
       const waveform=channel.waveform_samples??raw.waveform_samples?.[key];
-      return {key,power:fresh?power:null,current:fresh?current:null,active:fresh&&!muted?active:muted?false:null,
+      return {key,power,current:fresh?current:null,active:fresh&&!muted?active:muted?false:null,
         frequency:fresh?number(channel.frequency_hz,sample?.frequency_hz):null,
         samples:fresh&&Array.isArray(waveform)?waveform.filter(v=>typeof v==='number'&&Number.isFinite(v)).slice(-256):[]};
     })};

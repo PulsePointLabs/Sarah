@@ -22,6 +22,7 @@ export function usePhaseAnnouncements({ prediction, sample, voiceSettings, sessi
       state.current = result.state;
       if (!result.cue || input.microphoneActive) return;
       const playback = input.audio.playCue(result.cue);
+      if (!playback.ok) setMessage(`Announcement waiting: ${playback.reason.replaceAll('_',' ')}.`);
       if (playback.ok) {
         state.current = { ...result.state, lastPhase: result.cue.type, lastSpokenAt: result.cue.atMs };
         setMessage(`Last announced: ${result.cue.phrase}`);

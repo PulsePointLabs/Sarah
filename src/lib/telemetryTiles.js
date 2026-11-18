@@ -21,7 +21,8 @@ export function tileTelemetry(items,width,height) {
   let y=0;
   for(let i=0;i<rows.length;i++){
     const row=rows[i],sum=row.reduce((n,item)=>n+basis(item)*weight(item,'widthWeight'),0),rowH=heights[i];let x=0;
-    for(const item of row){const cardW=w*basis(item)*weight(item,'widthWeight')/sum;out.push({...item,x,y,width:cardW,height:rowH,viewportWidth:w});x+=cardW;}
+    const minWidths=row.map(item=>Math.min(w,metric(item)?110:item.id==='phase'?220:240)),minTotal=minWidths.reduce((a,b)=>a+b,0);
+    for(const item of row){const itemIndex=row.indexOf(item),cardW=minTotal>=w?w*minWidths[itemIndex]/minTotal:minWidths[itemIndex]+(w-minTotal)*basis(item)*weight(item,'widthWeight')/sum;out.push({...item,x,y,width:cardW,height:rowH,viewportWidth:w});x+=cardW;}
     y+=rowH;
   }
   return out;

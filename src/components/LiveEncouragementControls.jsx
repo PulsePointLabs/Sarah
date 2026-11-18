@@ -8,7 +8,7 @@ export default function LiveEncouragementControls({ enabled, volume, audioState,
     : audioState !== "running" ? "Tap Test voice to enable and check audio on this device."
     : status.phase === "preparing" ? status.message
     : playback?.ok === false ? liveCuePlaybackMessage(playback.reason)
-    : status.phase === "ready" ? "Voice ready. Automatic cues follow supported telemetry changes."
+    : status.phase === "ready" ? "Voice ready. Monitoring cues work without recording."
     : "Tap Test voice to preload and check Sarah's voice.";
 
   return (
