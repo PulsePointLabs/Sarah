@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { createLiveCueStateMachineState, stepLiveCueStateMachine } from "@/lib/liveCueStateMachine";
 import { resolveLiveCuePhraseBank } from "@/lib/liveCuePhrases";
 
@@ -10,8 +10,10 @@ export function useLiveCueEngine({
   getSessionTime,
   onTimelineEvent,
   microphoneActive = false,
+  active = true,
 } = {}) {
   const machineRef = useRef(createLiveCueStateMachineState());
+  const generatedEpoch=useRef(0),recentGenerated=useRef([]),generating=useRef(false);
   const [latestCue, setLatestCue] = useState(null);
   const [lastSuppression, setLastSuppression] = useState(null);
 
@@ -21,17 +23,20 @@ export function useLiveCueEngine({
   );
 
   const inputsRef = useRef(null);
-  inputsRef.current = { audio, cueSettings, captureKind, sessionId, getSessionTime, onTimelineEvent, microphoneActive, phraseBank };
+  inputsRef.current = { audio, cueSettings, captureKind, sessionId, getSessionTime, onTimelineEvent, microphoneActive, phraseBank, active };
 
   const reset = useCallback(() => {
+    generatedEpoch.current++;recentGenerated.current=[];
     machineRef.current = createLiveCueStateMachineState();
     setLatestCue(null);
     setLastSuppression(null);
     inputsRef.current.audio?.stop?.();
   }, []);
+  useEffect(()=>{reset();},[sessionId,active,reset]);
 
   const step = useCallback((prediction, sample = {}) => {
     const { audio, cueSettings, captureKind, sessionId, getSessionTime, onTimelineEvent, microphoneActive, phraseBank } = inputsRef.current;
+    if(!inputsRef.current.active)return null;
     const now = Date.now();
     const sessionTimeSec = typeof getSessionTime === "function" ? getSessionTime() : sample.sessionTimeSec;
     const intimateCadence = cueSettings?.style === "intimate_lovers_voice";
@@ -56,6 +61,7 @@ export function useLiveCueEngine({
           },
           maxCuesPerMinute: intimateCadence ? 5 : 4,
         } : {}),
+        ...(cueSettings?.generationMode!=='prerecorded'?{globalCooldownMs:45000,maxCuesPerMinute:2}:{}),
       },
       phraseBank.phrases
     );
@@ -66,6 +72,22 @@ export function useLiveCueEngine({
     }
 
     if (!result.cue) return null;
+
+    if(cueSettings?.generationMode!=='prerecorded' && audio?.speakGenerated){
+      if(microphoneActive||generating.current)return null;
+      generating.current=true;
+      const epoch=generatedEpoch.current,state=machineRef.current.state;
+      audio.speakGenerated(result.cue,{captureKind,style:cueSettings?.style,recent:recentGenerated.current,
+        context:{...sample,hr:sample.hr??prediction?.currentHr,baselineHr:sample.baselineHr??prediction?.baselineHr,buildConfidence:prediction?.buildConfidence,plateauConfidence:prediction?.plateauConfidence,recovery:prediction?.recovery,sessionTimeSec},
+        canPlay:()=>generatedEpoch.current===epoch&&machineRef.current.state===state&&inputsRef.current.sessionId===sessionId&&inputsRef.current.active&&inputsRef.current.cueSettings?.enabled!==false&&!inputsRef.current.microphoneActive,
+      }).then(playback=>{
+        if(generatedEpoch.current!==epoch)return;
+        if(playback.phrase){recentGenerated.current=[...recentGenerated.current,playback.phrase].slice(-6);setLatestCue({...result.cue,phrase:playback.phrase,sessionId,sessionTimeSec,playback,generated:true});}
+        if(!playback.ok)setLastSuppression({reason:playback.reason,message:playback.error,atMs:Date.now()});
+        if(playback.ok)onTimelineEvent?.({type:'live_cue',label:'Sarah generated feedback',time_s:sessionTimeSec,metadata:{...result.cue,phrase:playback.phrase,generated:true,playback}});
+      }).finally(()=>{generating.current=false;});
+      return null;
+    }
 
     let playback = { ok: false, reason: "microphone_active" };
     if (!microphoneActive) {

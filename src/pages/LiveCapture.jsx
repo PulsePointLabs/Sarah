@@ -6,6 +6,9 @@ import CivetLiveCard from "@/components/CivetLiveCard.jsx";
 import { PhoneTelemetry, isPhoneAcquisition, isNativeSarah } from "@/lib/phoneTelemetry.js";
 import { HOWL_MAX_INTENSITY } from "@/lib/howlIntensity.js";
 import CivetLiveAlert from "@/components/CivetLiveAlert.jsx";
+import {createPortal} from "react-dom";
+import PhaseOverviewCard from "@/components/PhaseOverviewCard.jsx";
+import HowlLiveCard from "@/components/HowlLiveCard.jsx";
 import LiveSessionConsole from "@/components/LiveSessionConsole.jsx";
 import {hasActiveLiveSession} from '@/lib/liveSessionState.js';
 import CivetSetup from "@/components/CivetSetup.jsx";
@@ -128,7 +131,7 @@ import {
 // One time-bucketed point per second preserves an hour of real detector context
 // without feeding Recharts the raw multi-packet-per-second H10 stream.
 const MAX_TELEMETRY_POINTS = 3600;
-const TELEMETRY_DASHBOARD_STORAGE_KEY = "pulsepoint.telemetryDashboard.v5";
+const TELEMETRY_DASHBOARD_STORAGE_KEY = "pulsepoint.telemetryDashboard.v6";
 const TELEMETRY_DASHBOARD_PANELS = [
   { id: "notices", label: "Sarah live cue", helper: "Current physiological cue and confidence", cols: 12, rows: 2 },
   { id: "engine", label: "Acquisition health", helper: "Engine, sample rates, buffer, and storage", cols: 12, rows: 1, enabled: false },
@@ -136,7 +139,7 @@ const TELEMETRY_DASHBOARD_PANELS = [
   { id: "vitals", label: "Vital cards", helper: "HR, BP, HRV, respiration, motion, and EMG", cols: 12, rows: 5 },
   { id: "phase", label: "Phase watch", helper: "Approach, plateau, recovery, and markers", cols: 4, rows: 6 },
   { id: "threshold", label: "Threshold Load Matrix", helper: "Approach, plateau, confidence, and Howl dose", cols: 6, rows: 3 },
-  { id: "respiratory", label: "Respiratory & Somatic Response", helper: "Breathing and chest motion", cols: 6, rows: 3 },
+  { id: "respiratory", enabled: false, label: "Respiratory & Somatic Response", helper: "Breathing and chest motion", cols: 6, rows: 3 },
   { id: "cardiac", label: "Cardiac timeline", helper: "HR, baseline, HRV, and approach", cols: 12, rows: 4 },
   { id: "civet", label: "CIVET pelvic response", helper: "Pressure and contraction evidence", cols: 6, rows: 4 },
   { id: "emg", label: "EMG timeline", helper: "Perineal or dual-channel muscle activity", cols: 12, rows: 4, enabled: false },
@@ -1538,7 +1541,8 @@ function MetricCard({ icon, label, value, helper, active, level, trendValues = [
   return (
     <div
       className={`telemetry-metric-card relative min-w-0 overflow-hidden rounded-xl border transition-shadow ${display ? "flex h-full min-h-0 flex-col justify-center p-2.5 pb-4" : large ? "min-h-[10.5rem] p-5 pb-6" : "min-h-[8rem] p-4 pb-5"} ${active ? "border-primary/40 bg-primary/8" : "border-border bg-card"} ${beatPulse ? "shadow-[0_0_30px_rgba(244,63,94,0.55)] ring-2 ring-rose-400/70" : ""}`}
-      style={hasLevel ? { borderColor: `${color}9a`, background: `linear-gradient(135deg, ${color}38, ${color}10 55%, hsl(var(--card)) 100%)` } : undefined}
+      title={`${label}: ${value}. ${helper||''}`}
+      style={{'--value-chars':String(value??'—').length,...(hasLevel ? { borderColor: `${color}9a`, background: `linear-gradient(135deg, ${color}38, ${color}10 55%, hsl(var(--card)) 100%)` } : {})}}
     >
       {beatPulse ? <span key={`metric-beat-${label}-${beatPulse}`} className="pointer-events-none absolute right-4 top-4 h-5 w-5 rounded-full bg-rose-400/45 animate-ping" /> : null}
       {hasLevel && (
@@ -1741,8 +1745,8 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const [mediaProcessing, setMediaProcessing] = useState("");
   const [mediaError, setMediaError] = useState("");
   const [presetModalOpen, setPresetModalOpen] = useState(false);
-  const [hiddenTelemetryItems, setHiddenTelemetryItems] = useState(() => { try { const stored = JSON.parse(localStorage.getItem("pulsepoint.telemetryHidden.v1")); return Array.isArray(stored) ? stored : []; } catch { return []; } });
-  useEffect(() => { localStorage.setItem("pulsepoint.telemetryHidden.v1", JSON.stringify(hiddenTelemetryItems)); }, [hiddenTelemetryItems]);
+  const [hiddenTelemetryItems, setHiddenTelemetryItems] = useState(() => { try { const stored = JSON.parse(localStorage.getItem("pulsepoint.telemetryHidden.v2")); return Array.isArray(stored) ? stored : ["metric:Respiration","metric:Chest Motion"]; } catch { return ["metric:Respiration","metric:Chest Motion"]; } });
+  useEffect(() => { localStorage.setItem("pulsepoint.telemetryHidden.v2", JSON.stringify(hiddenTelemetryItems)); }, [hiddenTelemetryItems]);
   const setTelemetryItemVisible = (id, visible) => setHiddenTelemetryItems(old => visible ? old.filter(item => item !== id) : [...new Set([...old, id])]);
   const [telemetryControlsOpen, setTelemetryControlsOpen] = useState(false);
   const [civetEnabled,setCivetEnabled]=useState(()=>localStorage.getItem('sarah.session.civetEnabled')==='true');
@@ -1884,6 +1888,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const [endingSession, setEndingSession] = useState(false);
   const [liveCueSettings, setLiveCueSettings] = useState(() => ({
     ...DEFAULT_LIVE_CUE_SETTINGS,
+    generationMode: localStorage.getItem("sarah.encouragement.mode") || "generated",
     customPhrases: readLiveCueCustomization().phrases,
     customInstructions: readLiveCueCustomization().instructions,
     enabled: readLiveCaptureLaunchProfile().livePhysiologyCuesEnabled,
@@ -4753,6 +4758,26 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     localStorage.setItem(TELEMETRY_DASHBOARD_STORAGE_KEY, JSON.stringify(telemetryDashboard));
   }, [telemetryDashboard]);
 
+  const [telemetryPreset,setTelemetryPreset]=useState(()=>localStorage.getItem("sarah.telemetry.preset")||"custom");
+  const applyTelemetryPreset = name => {
+    setTelemetryPreset(name);localStorage.setItem("sarah.telemetry.preset",name);
+    const panels={balanced:['vitals','cardiac','phase','howl'],cardiac:['vitals','cardiac'],response:['vitals','phase','threshold','civet'],bedside:['vitals'],device:['vitals','civet','howl']}[name];
+    if(!panels)return;
+    setTelemetryDashboard(defaultTelemetryDashboard().map(panel=>({...panel,enabled:panels.includes(panel.id)})));
+    const hide=['metric:Respiration','metric:Chest Motion','metric:RR Samples'];
+    if(name==='cardiac'||name==='bedside')hide.push('metric:Near-Climax Watch','metric:HR change');
+    if(name==='bedside')hide.push('metric:SDNN','metric:Below recent peak','metric:Recovery');
+    if(name==='device')hide.push('metric:Blood Pressure','metric:Near-Climax Watch','metric:RMSSD','metric:SDNN','metric:HR change','metric:HR response','metric:Recovery','metric:Below recent peak');
+    setHiddenTelemetryItems(hide);setSelectedTelemetryPanel('');setTelemetryControlsOpen(false);
+    window.dispatchEvent(new Event('telemetry-layout-reset'));
+  };
+
+  useEffect(()=>{
+    if(!telemetryFocusView||localStorage.getItem('sarah.telemetry.preset'))return;
+    if(window.innerWidth<600)applyTelemetryPreset('bedside');
+    else if(window.innerHeight<500)applyTelemetryPreset('cardiac');
+  },[telemetryFocusView]);
+
   const telemetryPanelEnabled = useCallback((id) => (
     telemetryDashboard.find((panel) => panel.id === id)?.enabled !== false
   ), [telemetryDashboard]);
@@ -5714,12 +5739,14 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     syncBloodPressureForLiveSession,
   ]);
 
+  useEffect(()=>{localStorage.setItem('sarah.encouragement.mode',liveCueSettings.generationMode||'generated');},[liveCueSettings.generationMode]);
+
   const liveCuePhraseBank = useMemo(
     () => resolveLiveCuePhraseBank(liveCueSettings, { captureKind }),
     [captureKind, liveCueSettings],
   );
   const liveCueAudio = useLiveCueAudio({
-    phrases: liveCuePhraseBank.phrases,
+    phrases: liveCueSettings.generationMode!=="prerecorded"?{voice_check:["Sarah is ready. I’ll keep feedback brief and grounded in your live readings."]}:liveCuePhraseBank.phrases,
     settings: liveCuePhraseBank.settings,
     enabled: liveCueSettings.enabled,
   });
@@ -5731,6 +5758,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       bodyExploration: captureIsBodyExploration },
   });
   const liveCueEngine = useLiveCueEngine({
+    active: recordingActive || cameraRecording,
     captureKind,
     cueSettings: liveCueSettings,
     audio: liveCueAudio,
@@ -6299,7 +6327,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   }, [buildLevel, captureIsBodyExploration, getCurrentSessionTime, prediction, recordingActive, telemetryHistory]);
 
   useEffect(() => {
-    if (!recordingActive || !telemetryHistory.length || !hrTelemetry) return;
+    if ((!recordingActive && !cameraRecording) || !telemetryHistory.length || !hrTelemetry) return;
     liveCueEngine.step(prediction, {
       hr: readNumber(hrTelemetry?.currentHr, hrTelemetry?.hr, hrTelemetry?.heartRate),
       baselineHr: readNumber(hrTelemetry?.baselineHr, hrTelemetry?.baseline_hr),
@@ -6308,7 +6336,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       hasMultipleSignalFamilies: Boolean(prediction.hrvUsable || emgTelemetry),
       sessionTimeSec: getCurrentSessionTime(),
     });
-  }, [emgTelemetry, getCurrentSessionTime, hrTelemetry, liveCueEngine.step, prediction, recordingActive, telemetryHistory.length]);
+  }, [cameraRecording, emgTelemetry, getCurrentSessionTime, hrTelemetry, liveCueEngine.step, prediction, recordingActive, telemetryHistory.length]);
 
   useEffect(() => {
     const cue = liveCueEngine.latestCue;
@@ -7869,7 +7897,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         </div>
       )}
 
-      {howlQuickModalOpen && (
+      {howlQuickModalOpen && createPortal((
         <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/45 p-4" onMouseDown={() => setHowlQuickModalOpen(false)}>
           <div
             className="max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-border bg-card p-4 shadow-2xl"
@@ -7899,7 +7927,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
             {howlQuickControlPanel}
           </div>
         </div>
-      )}
+      ), document.fullscreenElement || document.body)}
 
       {!focusView && showAdvancedSetupConsole && !phoneCaptureBusy && <ObsRecordingSync />}
 
@@ -8103,6 +8131,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           {voiceAnnotationPanel}
           <PhaseAnnouncementControls bodyExploration={captureIsBodyExploration} controller={phaseAnnouncements} />
           <LiveEncouragementControls
+            generationMode={liveCueSettings.generationMode} onGenerationMode={mode=>setLiveCueSettings(previous=>({...previous,generationMode:mode}))}
             enabled={liveCueSettings.enabled}
             volume={liveCueSettings.volume}
             audioState={liveCueAudio.audioState}
@@ -9796,7 +9825,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       {(telemetryFocusView || (!focusView && captureTab === "telemetry") || (!focusView && captureTab === "session" && launchActive && detailedTelemetryOpen)) && <div ref={telemetryDisplayRef} data-telemetry-fullscreen={telemetryFullscreen}
         onPointerDown={(event) => { if (!event.target.closest("[data-telemetry-header]")) setTelemetryControlsOpen(false); }}
         className={telemetryFocusView
-          ? "fixed inset-0 z-[60] !m-0 flex h-[100dvh] flex-col overflow-hidden bg-card p-3"
+          ? "telemetry-dashboard-surface fixed inset-0 z-[60] !m-0 flex h-[100dvh] flex-col overflow-hidden bg-card p-1"
           : `rounded-xl border border-border bg-card ${distanceTelemetryView ? "space-y-6 p-5 md:p-6" : "space-y-4 p-4"}`}
         style={telemetryFocusView ? {
           "--background": "204 46% 7%",
@@ -9808,8 +9837,9 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           "--border": "199 28% 25%",
         } : undefined}
       >
-        <div data-telemetry-header onMouseEnter={() => setTelemetryControlsOpen(true)} onMouseLeave={() => setTelemetryControlsOpen(false)} onFocus={() => setTelemetryControlsOpen(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setTelemetryControlsOpen(false); }} className={`relative flex min-w-0 flex-wrap items-center justify-between gap-3 ${telemetryFocusView ? "shrink-0 pb-2 z-30" : ""}`}>
-          <h3 className={`${telemetryFocusView ? "text-base md:text-3xl" : distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex min-w-0 flex-wrap items-center gap-2`}>
+        <div className="flex shrink-0 items-center gap-2 px-1 text-sm" aria-label="Telemetry presets"><label>View <select aria-label="Telemetry view preset" className="rounded border border-border bg-card px-2 py-1" value={telemetryPreset} onChange={e=>applyTelemetryPreset(e.target.value)}><option value="custom" disabled>Choose preset</option><option value="balanced">Balanced</option><option value="cardiac">Cardiac focus</option><option value="response">Physiological response</option><option value="bedside">Large bedside numbers</option><option value="device">Pressure + Howl</option></select></label></div>
+        <div data-telemetry-header  className={`relative flex min-w-0 flex-wrap items-center justify-between gap-3 ${telemetryFocusView ? "shrink-0 pb-2 z-30" : ""}`}>
+          <h3 className={`${telemetryFocusView ? "text-base md:text-xl" : distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex min-w-0 flex-wrap items-center gap-2`}>
             <CircleDot className={distanceTelemetryView ? "w-6 h-6" : "w-4 h-4"} /> Live Telemetry
 
             {telemetryFocusView && <span className="ml-2 whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{new Date(liveHealthNowMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}
@@ -9903,7 +9933,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
                   <SlidersHorizontal className="h-4 w-4" /> Choose items
                 </button>
                 <button type="button" onClick={() => setSelectedTelemetryPanel("")} className="min-h-11 rounded-lg border border-border px-3 text-sm">
-                  {selectedTelemetryPanel ? "Done editing" : "Tap any item to move or resize"}
+                  {selectedTelemetryPanel ? "Done editing" : "Use Edit layout to move or resize"}
                 </button>
                 <button
                   type="button"
@@ -10090,39 +10120,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           </div>
         </div>)}
 
-        {telemetryPanelEnabled("howl") && howlSafetyActive && !focusView && renderTelemetryDashboardPanel("howl", <div className="h-full overflow-hidden rounded-xl border border-cyan-400/25 bg-cyan-500/[0.06] p-3 shadow-sm" style={{ order: telemetryPanelOrder("howl") }}>
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="flex items-center gap-2 text-sm font-bold uppercase tracking-[0.16em] text-cyan-500">
-                  <Zap className="h-5 w-5" /> Howl Control
-                </p>
-                <span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${howlSarahAutoEnabled ? "bg-primary/20 text-primary" : howlManualControlsUnlocked ? "bg-emerald-500/15 text-emerald-500" : "bg-muted text-muted-foreground"}`}>
-                  {howlSarahAutoEnabled ? "Sarah auto armed" : howlManualControlsUnlocked ? "Manual ready" : "Locked"}
-                </span>
-              </div>
-              <p className="mt-1 truncate text-sm text-muted-foreground">{howlDisplayStatus}</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={howlCommandForm.channel || "a"}
-                onChange={(event) => setHowlCommandForm((previous) => ({ ...previous, channel: event.target.value }))}
-                className="h-11 rounded-lg border border-border bg-card px-3 text-sm font-bold text-foreground"
-                aria-label="Howl control channel"
-              >
-                <option value="a">Channel A</option>
-                <option value="b">Channel B</option>
-                <option value="all">Both channels</option>
-              </select>
-              <span className="min-w-20 rounded-lg border border-border bg-card px-4 py-2 text-center font-mono text-2xl font-bold tabular-nums text-foreground">
-                {fmtNumber(howlSelectedChannelIntensity, 0)}
-              </span>
-              <button type="button" onClick={() => sendHowlControlCommand("decrement_power", { channel: howlCommandForm.channel || "a", step: 1 })} disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy)} className="h-11 rounded-lg border border-border bg-card px-4 text-lg font-bold text-foreground disabled:opacity-40">-</button>
-              <button type="button" onClick={() => sendHowlControlCommand("increment_power", { channel: howlCommandForm.channel || "a", step: 1 })} disabled={!howlManualControlsUnlocked || Boolean(howlControlBusy)} className="h-11 rounded-lg bg-primary px-4 text-lg font-bold text-primary-foreground disabled:opacity-40">+</button>
-              <button type="button" onClick={() => setHowlQuickModalOpen(true)} className="h-11 rounded-lg border border-border bg-muted px-4 text-sm font-bold text-foreground">Details</button>
-            </div>
-          </div>
-        </div>)}
+        {telemetryPanelEnabled("howl") && renderTelemetryDashboardPanel("howl", <HowlLiveCard sample={howlTelemetry} onControls={()=>setHowlQuickModalOpen(true)}/>)}
 
         {telemetryPanelEnabled("vitals") && renderTelemetryDashboardPanel("vitals", <div className={focusView ? "telemetry-vitals-grid h-full min-h-0 gap-2 overflow-hidden" : `grid h-full min-h-0 auto-rows-fr grid-cols-2 gap-2 overflow-hidden sm:grid-cols-3 ${telemetryEmgLive || hrTelemetry?.source === "direct_h10" ? "lg:grid-cols-4 xl:grid-cols-5" : "lg:grid-cols-3"}`} style={{ order: telemetryPanelOrder("vitals") }}>
           <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="Current HR" value={fmtNumber(displayedHr, 0)} helper="beats per minute" active={displayedHr != null} level={currentHrLevel} trendValues={telemetryTrendValues(telemetryHistory, "hr", displayedHr)} large display={focusView} beatPulse={visibleHeartbeatPulseId} />
@@ -10156,6 +10154,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
               <MetricCard icon={<HeartPulse className="w-4 h-4" />} label="RR Samples" value={fmtNumber(displayedRrCount, 0)} helper="rolling H10 interval window" active={Number(displayedRrCount) > 0} level={Math.min(100, (Number(displayedRrCount) || 0) * 1.25)} trendValues={telemetryTrendValues(telemetryHistory, "rrCount", displayedRrCount)} large display={focusView} />
               <MetricCard icon={<Activity className="w-4 h-4" />} label="RMSSD" value={fmtNumber(displayedRmssd, 1)} helper={hrvQuality ? `HRV quality: ${hrvQuality}` : "holding last valid RR window"} active={displayedRmssd != null} level={hrvQuality === "high" ? 90 : hrvQuality === "moderate" ? 65 : hrvQuality === "low" ? 35 : 0} trendValues={telemetryTrendValues(telemetryHistory, "hrvRmssd", displayedRmssd)} large display={focusView} />
               <MetricCard icon={<Activity className="w-4 h-4" />} label="SDNN" value={fmtNumber(displayedSdnn, 1)} helper={hrvQuality ? `HRV quality: ${hrvQuality}` : "holding last valid RR window"} active={displayedSdnn != null} level={hrvQuality === "high" ? 90 : hrvQuality === "moderate" ? 65 : hrvQuality === "low" ? 35 : 0} trendValues={telemetryTrendValues(telemetryHistory, "hrvSdnn", displayedSdnn)} large display={focusView} />
+              {!hiddenTelemetryItems.includes("metric:Respiration") && (
               <MetricCard
                 icon={<Activity className="w-4 h-4" />}
                 label="Respiration"
@@ -10168,6 +10167,8 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
                 display={focusView}
                 valueClassName={!h10Respiration.available && focusView ? "!text-[clamp(1.6rem,2.4vw,3.25rem)]" : ""}
               />
+              )}
+              {!hiddenTelemetryItems.includes("metric:Chest Motion") && (
               <MetricCard
                 icon={<Radio className="w-4 h-4" />}
                 label="Chest Motion"
@@ -10180,6 +10181,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
                 display={focusView}
                 valueClassName={!h10Motion.available && focusView ? "!text-[clamp(1.6rem,2.4vw,3.25rem)]" : ""}
               />
+              )}
               <MetricCard
                 icon={<RefreshCw className="w-4 h-4" />}
                 label={captureIsBodyExploration ? "Below recent peak" : "Recovery"}
@@ -10205,10 +10207,9 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         </div>)}
 
         {telemetryPanelEnabled("phase") && captureIsBodyExploration && renderTelemetryDashboardPanel("phase", (
-          <section className="h-full overflow-y-auto rounded-xl border border-border bg-card p-3" aria-label="Procedure observations">
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-primary">Procedure response</h3>
-            <p className="mt-1 text-sm text-muted-foreground">Observed cardiovascular changes and your timestamped procedure notes.</p>
-            <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+          <section className="telemetry-procedure-response h-full overflow-hidden rounded-xl border border-border bg-card p-2" aria-label="Procedure observations">
+            <header className="telemetry-procedure-heading flex flex-wrap items-center justify-between gap-1"><h3 className="font-semibold text-primary">Procedure response</h3><span className="text-muted-foreground">Cardiovascular changes · logged observations</span></header>
+            <div className="telemetry-procedure-stats mt-1 grid grid-cols-2 gap-1 text-sm">
               <div className="rounded-lg border border-border p-3"><span className="text-muted-foreground">HR from baseline</span>
                 <p className="text-xl font-semibold">{hrResponseDelta == null ? "--" : `${hrResponseDelta > 0 ? "+" : ""}${fmtNumber(hrResponseDelta, 0)} bpm`}</p></div>
               <div className="rounded-lg border border-border p-3"><span className="text-muted-foreground">Rectal fluid logged</span>
@@ -10230,7 +10231,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         ))}
 
         {telemetryPanelEnabled("phase") && !captureIsBodyExploration && (
-          renderTelemetryDashboardPanel("phase", <div className="h-full overflow-hidden rounded-xl border border-border bg-muted/20 p-3" style={{ order: telemetryPanelOrder("phase") }}>
+          renderTelemetryDashboardPanel("phase", focusView ? <PhaseOverviewCard prediction={monitoringPrediction} approach={displayedNearClimax} plateau={monitoringPrediction.plateauConfidence} recovery={monitoringPrediction.recovery} encouragement={liveCueSettings.enabled}/> : <div className="h-full overflow-hidden rounded-xl border border-border bg-muted/20 p-3" style={{ order: telemetryPanelOrder("phase") }}>
           <div className={focusView ? "telemetry-phase-body" : "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"}>
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
@@ -10463,7 +10464,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         </TrendPanel>
         </div>)}
 
-        {civetEnabled && telemetryPanelEnabled("civet") && (civet.latest || civet.history?.length > 0) && renderTelemetryDashboardPanel("civet", <div className="h-full min-h-0" style={{ minHeight: focusView ? 0 : 420 }}><CivetLiveCard live={civet} onSetup={() => {setCivetEnabled(true);setCivetSetupOpen(true);}} /></div>)}
+        {telemetryPanelEnabled("civet") && renderTelemetryDashboardPanel("civet", <div className="h-full min-h-0" style={{ minHeight: focusView ? 0 : 420 }}><CivetLiveCard live={civet} onSetup={() => {setCivetEnabled(true);setCivetSetupOpen(true);}} /></div>)}
         {telemetryPanelEnabled("emg") && telemetryEmgLive && (
           renderTelemetryDashboardPanel("emg", <div className="h-full min-h-0" style={{ order: telemetryPanelOrder("emg") }}><TrendPanel title={selectedEmgConfig.trendTitle} subtitle={selectedEmgConfig.trendSubtitle} empty={!hasEmgTrend} heightClass={distanceTelemetryView ? "h-80 md:h-[26rem]" : "h-64 md:h-72"} distanceView={distanceTelemetryView} fill={focusView}>
             <ResponsiveContainer width="100%" height="100%">

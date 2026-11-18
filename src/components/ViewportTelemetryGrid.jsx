@@ -1,55 +1,58 @@
-import { Children, Fragment, isValidElement, useLayoutEffect, useRef, useState, useEffect } from 'react';
-import EditableTelemetryPanel from './EditableTelemetryPanel';
-import { packTelemetry, telemetryPositionFree } from '@/lib/telemetryPacking';
+import {Children,Fragment,isValidElement,useLayoutEffect,useRef,useState,useEffect} from 'react';
+import {tileTelemetry,reorderTile} from '@/lib/telemetryTiles.js';
 import './viewportTelemetry.css';
+const STORAGE='pulsepoint.telemetryTiles.v2';
+function flatten(children){return Children.toArray(children).flatMap(child=>!isValidElement(child)?[]:child.type===Fragment||child.props.className==='contents'?flatten(child.props.children):[child]);}
 
-const STORAGE = 'pulsepoint.telemetryViewport.v1';
-function flatten(children) {
-  return Children.toArray(children).flatMap(child => {
-    if (!isValidElement(child)) return [];
-    if (child.type === Fragment || child.props.className === 'contents') return flatten(child.props.children);
-    return [child];
-  });
-}
-
-function FitContents({ children }) {
-  return <div className="telemetry-fit-outer"><div className="telemetry-fit-body">{children}</div></div>;
-}
-
-export default function ViewportTelemetryGrid({ children, enabled, selected, onSelect, hiddenItems = [], onHide }) {
-  const viewport = useRef(null);
-  const [height,setHeight] = useState(720);
-  useLayoutEffect(()=>{if(!enabled || !viewport.current)return;const observer=new ResizeObserver(([entry])=>setHeight(entry.contentRect.height));observer.observe(viewport.current);return()=>observer.disconnect();},[enabled]);
-  const [narrow, setNarrow] = useState(() => window.innerWidth < 640);
-  useEffect(() => { const resize = () => setNarrow(window.innerWidth < 640); window.addEventListener('resize', resize); return () => window.removeEventListener('resize', resize); }, []);
-  const [saved, setSaved] = useState(() => { try { return JSON.parse(localStorage.getItem(STORAGE)) || {}; } catch { return {}; } });
-  useEffect(() => { try { localStorage.setItem(STORAGE, JSON.stringify(saved)); } catch {} }, [saved]);
-  useEffect(() => { const reset = () => setSaved({}); window.addEventListener("telemetry-layout-reset", reset); return () => window.removeEventListener("telemetry-layout-reset", reset); }, []);
-  if (!enabled) return <div className="flex flex-col gap-6">{children}</div>;
-  const items = flatten(children).flatMap(child => {
-    if (child.props.id === 'vitals') return flatten(child.props.children.props.children).map(card => ({
-      id: `metric:${card.props.telemetryId || card.props.label}`, label: card.props.label, content: card, cols: narrow ? 6 : 3, rows: 2, metric: true,
-    }));
-    if (!child.props.id) return [];
-    return [{ id: child.props.id, label: child.props.label, content: child.props.children, cols: narrow ? 12 : 6, rows: child.props.id==='civet'?6:child.props.id==='phase'?5:3 }];
-  }).filter(item => !hiddenItems.includes(item.id)).sort((a,b) => (saved[a.id]?.order ?? 100) - (saved[b.id]?.order ?? 100));
-  const packed = packTelemetry(items.map(item => ({ ...item, ...saved[item.id], rows:Math.max(item.id==='civet'?6:item.id==='phase'?5:item.metric?2:3,saved[item.id]?.rows || item.rows) })));
-  const update = (id, patch) => setSaved(old => ({ ...old, [id]: { ...old[id], ...patch } }));
-  const reorder = (id, target) => {
-    const next = [...items], from = next.findIndex(i => i.id === id), to = next.findIndex(i => i.id === target);
-    if (from < 0 || to < 0) return;
-    next.splice(to, 0, next.splice(from, 1)[0]);
-    setSaved(old => ({ ...old, ...Object.fromEntries(next.map((item, order) => [item.id, { ...old[item.id], order, x:undefined, y:undefined }])) }));
+function Tile({item,editing,onSelect,onWeight,onDrop,onHide,children}){
+  const gesture=useRef(null),[drag,setDrag]=useState(null);
+  const begin=(e,resize=false)=>{
+    if(!editing||(!resize&&e.target.closest('button,input,select,a,textarea')))return;
+    e.preventDefault();e.stopPropagation();e.currentTarget.setPointerCapture(e.pointerId);
+    gesture.current={x:e.clientX,y:e.clientY,resize,weight:item.weight||1,width:item.width,height:item.height};onSelect?.(item.id);
   };
-  return <div ref={viewport} className="telemetry-viewport-scroll"><div data-testid="viewport-telemetry-grid" className="telemetry-viewport-grid" style={{height:Math.max(height,packed.rows*72+4*(packed.rows-1)+6),gridTemplateRows:`repeat(${packed.rows},minmax(0,1fr))`}}>
-    {items.map((item, index) => <EditableTelemetryPanel key={item.id} id={item.id} label={item.label}
-      layout={packed.placements[index]} placement={packed.placements[index]} fit selected={selected === item.id} onSelect={onSelect}
-      onHide={onHide ? () => { onHide(item.id); onSelect(''); } : undefined}
-      onResize={size => update(item.id, size)} onMove={delta => reorder(item.id, items[index + delta]?.id)}
-      onReposition={position=>{const candidate={...packed.placements[index],...position};if(telemetryPositionFree(candidate,packed.placements,packed.rows))setSaved(previous=>({...previous,...Object.fromEntries(packed.placements.map(placement=>[placement.id,{...previous[placement.id],...placement,...(placement.id===item.id?position:{})}]))}));}}
-      minRows={item.id==='civet'?6:item.id==='phase'?5:item.metric?2:3}
-      onReorder={target => reorder(item.id, target)} onReset={() => update(item.id, { cols: item.cols, rows: item.rows })}>
-      {item.id === 'civet' ? item.content : <FitContents metric={item.metric} phase={item.id === 'phase'}>{item.content}</FitContents>}
-    </EditableTelemetryPanel>)}
-  </div></div>;
+  const move=e=>{
+    const g=gesture.current;if(!g)return;const dx=e.clientX-g.x,dy=e.clientY-g.y;
+    if(g.resize)onWeight(Math.max(.35,Math.min(5,g.weight*Math.exp(dx/Math.max(80,g.width)+dy/Math.max(80,g.height)))));
+    else setDrag({x:dx,y:dy});
+  };
+  const end=(e,cancelled=false)=>{const g=gesture.current;if(!g)return;if(!cancelled&&!g.resize)onDrop(e.clientX,e.clientY);gesture.current=null;setDrag(null);};
+  return <section tabIndex={editing?0:undefined} aria-label={item.label} data-telemetry-item={item.id}
+    className={`telemetry-tile ${editing?'telemetry-tile-editing':''} ${drag?'telemetry-tile-dragging':''}`}
+    onPointerDown={e=>begin(e)} onPointerMove={move} onPointerUp={end} onPointerCancel={e=>end(e,true)}
+    onKeyDown={e=>{if(!editing||e.target!==e.currentTarget)return;if(e.key==='ArrowLeft'||e.key==='ArrowUp'){e.preventDefault();onDrop(null,-1);}if(e.key==='ArrowRight'||e.key==='ArrowDown'){e.preventDefault();onDrop(null,1);}}}
+    style={{left:item.x,top:item.y,width:item.width,height:item.height,'--tile-font':`${Math.max(10,Math.min(24,item.width/22,item.height/9))}px`,...(drag?{transform:`translate(${drag.x}px,${drag.y}px)`,zIndex:100,pointerEvents:'none'}:{})}}>
+    <div className="telemetry-fit-outer"><div className="telemetry-fit-body">{children}</div></div>
+    {editing&&<><div className="telemetry-tile-grip" aria-hidden="true">⠿ {item.label}</div>
+      {onHide&&<button className="telemetry-tile-hide" aria-label={`Hide ${item.label}`} onClick={onHide}>×</button>}
+      <button className="telemetry-tile-resize" aria-label={`Resize ${item.label}`} onPointerDown={e=>begin(e,true)} onPointerMove={move} onPointerUp={end} onPointerCancel={e=>end(e,true)}>↘</button></>}
+  </section>;
+}
+
+export default function ViewportTelemetryGrid({children,enabled,onSelect,hiddenItems=[],onHide}){
+  const viewport=useRef(null),[size,setSize]=useState({width:1200,height:700}),[editing,setEditing]=useState(false);
+  const [saved,setSaved]=useState(()=>{try{return JSON.parse(localStorage.getItem(STORAGE))||{};}catch{return {};}});
+  useEffect(()=>{try{localStorage.setItem(STORAGE,JSON.stringify(saved));}catch{}},[saved]);
+  useEffect(()=>{const reset=()=>setSaved({});window.addEventListener('telemetry-layout-reset',reset);return()=>window.removeEventListener('telemetry-layout-reset',reset);},[]);
+  useLayoutEffect(()=>{if(!enabled||!viewport.current)return;const observer=new ResizeObserver(([entry])=>setSize({width:entry.contentRect.width,height:entry.contentRect.height}));observer.observe(viewport.current);return()=>observer.disconnect();},[enabled]);
+  if(!enabled)return <div className="flex flex-col gap-6">{children}</div>;
+  const items=flatten(children).flatMap(child=>child.props.id==='vitals'?flatten(child.props.children.props.children).map(card=>({id:`metric:${card.props.telemetryId||card.props.label}`,label:card.props.label,content:card,weight:1})):child.props.id?[{id:child.props.id,label:child.props.label,content:child.props.children,weight:['civet','phase','cardiac'].includes(child.props.id)?2:1.5}]:[])
+    .filter(item=>!hiddenItems.includes(item.id)).map(item=>({...item,weight:saved[item.id]?.weight||item.weight})).sort((a,b)=>(saved[a.id]?.order??100)-(saved[b.id]?.order??100));
+  const placements=tileTelemetry(items,size.width,size.height);
+  const reorder=(id,target)=>setSaved(old=>({...old,...Object.fromEntries(reorderTile(items,id,target).map((item,order)=>[item.id,{...old[item.id],order}]))}));
+  const drop=(id,x,y)=>{
+    const index=items.findIndex(item=>item.id===id);if(x===null){reorder(id,items[index+y]?.id);return;}
+    const box=viewport.current.getBoundingClientRect(),px=x-box.left,py=y-box.top;
+    const target=placements.filter(item=>item.id!==id).sort((a,b)=>Math.hypot(px-a.x-a.width/2,py-a.y-a.height/2)-Math.hypot(px-b.x-b.width/2,py-b.y-b.height/2))[0];
+    if(target)reorder(id,target.id);
+  };
+  return <div className="telemetry-workspace"><div className="telemetry-layout-bar">
+    <button type="button" aria-pressed={editing} onClick={()=>{setEditing(v=>!v);onSelect?.('');}}>{editing?'Done':'Edit layout'}</button>
+    <span>{editing?'Drag any card · pull its corner to share space':'Cards fill the screen · layout saved on this device'}</span>
+    {editing&&<button type="button" onClick={()=>setSaved({})}>Reset layout</button>}</div>
+    <div ref={viewport} data-testid="viewport-telemetry-grid" className="telemetry-viewport-grid" data-editing={editing}>
+      {placements.map(item=><Tile key={item.id} item={item} editing={editing} onSelect={onSelect}
+        onWeight={weight=>setSaved(old=>({...old,[item.id]:{...old[item.id],weight}}))} onDrop={(x,y)=>drop(item.id,x,y)} onHide={onHide?()=>onHide(item.id):undefined}>{item.content}</Tile>)}
+      {!items.length&&<p className="p-4">Choose a telemetry preset or enable cards in Controls.</p>}
+    </div></div>;
 }

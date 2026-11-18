@@ -104,3 +104,26 @@ test('cue callbacks stay stable across UI updates and use current audio and sess
 test('a blocked browser resume times out instead of stranding launch', async () => {
   await assert.rejects(resumeLiveCueContext({ state: 'suspended', resume: () => new Promise(() => {}) }, 5), /Test voice/);
 });
+test('original feedback prepares one new utterance using the saved voice path, without library fallback',async()=>{
+  const requests=[];
+  const h=audioHarness(async(url,options)=>{
+    requests.push({url,body:options?.body&&JSON.parse(options.body)});
+    if(url.endsWith('/generate'))return {ok:true,json:async()=>({text:'Heart rate is close to your resting baseline.'})};
+    if(url.endsWith('/prepare'))return {ok:true,json:async()=>({clips:[{text:'Heart rate is close to your resting baseline.',url:'/audio/generated.mp3'}]})};
+    return {ok:true,headers:{get:()=> 'audio/mpeg'},arrayBuffer:async()=>new ArrayBuffer(1)};
+  });
+  const result=await h.render().speakGenerated({type:'recovery',atMs:Date.now()},{context:{hr:82},canPlay:()=>true});
+  assert.equal(result.generated,true);assert.equal(result.reason,'audio_context_not_running');
+  assert.equal(requests.filter(r=>r.url.endsWith('/prepare')).length,1);
+  assert.equal(requests.find(r=>r.url.endsWith('/prepare')).body.clips.length,1);
+});
+test('a microphone/session change while generating cancels before any voice audio is prepared',async()=>{
+  let finish,allowed=true,prepares=0;
+  const h=audioHarness(async url=>{
+    if(url.endsWith('/generate'))return new Promise(resolve=>{finish=()=>resolve({ok:true,json:async()=>({text:'A new observation.'})});});
+    prepares++;throw Error('Must not prepare stale speech');
+  });
+  const pending=h.render().speakGenerated({type:'recovery',atMs:Date.now()},{canPlay:()=>allowed});
+  allowed=false;finish();const result=await pending;
+  assert.equal(result.reason,'cancelled');assert.equal(prepares,0);
+});

@@ -1,0 +1,14 @@
+.howl-live-card{display:flex;flex-direction:column;height:100%;min-height:0;gap:5px;padding:8px;border:1px solid #3c847e;border-radius:10px;background:#0c2129;color:#efffff;overflow:hidden;font-size:var(--tile-font,14px)}
+.howl-live-card header,.howl-live-card footer,.howl-channel-label,.howl-live-level{display:flex;gap:6px;align-items:center;justify-content:space-between;min-width:0}
+.howl-live-card header{flex-wrap:wrap}.howl-live-card header span{color:#a3c8c9}
+.howl-live-channels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));flex:1;min-height:0;gap:8px}
+.howl-live-channel{display:flex;flex-direction:column;gap:3px;min-width:0;min-height:0;border-top:2px solid var(--channel-color);padding-top:4px}
+.howl-channel-label{flex-wrap:wrap}.howl-channel-label span{font-size:max(10px,.8em);color:#9fb5bf}
+.howl-channel-label [data-output-state=on]{color:#5df6c0;background:#174138;border-radius:5px;padding:2px 4px}
+.howl-live-level{justify-content:flex-start}.howl-live-level strong{font-size:clamp(24px,min(18cqw,24cqh),100px);line-height:1;color:var(--channel-color)}
+.howl-live-channel svg{width:100%;flex:1;min-height:20px;overflow:hidden}.howl-live-channel small{font-size:max(10px,.8em);color:#9fb5bf}
+.howl-live-card footer span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:1}
+.howl-live-card button{border:1px solid #4e807e;border-radius:6px;padding:4px 7px;min-height:28px;white-space:nowrap;font-size:max(10px,1em)}
+.howl-live-modal{position:fixed;inset:0;z-index:120;display:flex;flex-direction:column;gap:10px;padding:20px;background:#07131bf7;color:white;overflow:hidden}
+.howl-live-close{align-self:flex-end;font-size:16px;border:1px solid #62cabc;padding:8px 20px;border-radius:8px}
+.howl-live-expanded-card{flex:1;font-size:clamp(14px,2vw,24px)}

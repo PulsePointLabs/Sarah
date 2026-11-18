@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { civetLiveSnapshot, updateCivetMonitorZoom } from '../lib/civetLiveMonitor.js';
 import { civetTraceBreak } from '../lib/civetTiming.js';
 import { civetLiveColor } from '../lib/civetLiveColor.js';
+import {civetFeedback} from '../lib/civetFeedback.js';
 import './civetLive.css';
 const preferenceKey = 'sarah.civet.live-card.v1';
 const layouts = { balanced: 'Balanced', focus: 'Live + timer', session: 'Recent + session', waveform: 'Waveform first', rhythm: 'Rhythm' };
@@ -60,13 +61,13 @@ export default function CivetLiveCard({ live, onSetup, expanded = false, compact
   function change(patch) { const next = { ...prefs, ...patch }; if (onPreferences) onPreferences(next); else setSaved(next); try { localStorage.setItem(preferenceKey, JSON.stringify(next)); } catch { /* Optional persistence. */ } }
   const { sample, current, held, rhythmic, duration } = snapshot;
   const timerLabel = held ? 'Current hold' : 'Last completed pulse', sessionLabel = live.recordingId ? 'session' : 'monitor', blank = current == null;
-  const state = !sample ? 'Signal lost' : blank ? sample.acquisition_message || 'Reference uncertain' : held ? 'Holding pressure' : rhythmic ? 'Between repeated pulses' : 'Resting range';
+  const state = civetFeedback(live);
   const now = <Reading value={current} label="Live · above rest" primary />;
   const timer = <Reading value={duration} unit="s" label={timerLabel} />;
   const average = <Reading value={blank ? null : snapshot.average} label="Average · last 30s" />;
   const max = <Reading value={snapshot.sessionMax} label={`Max · ${sessionLabel}`} />;
   const portalRoot = () => box.current?.ownerDocument.fullscreenElement || box.current?.ownerDocument.body || document.body;
-  return <section ref={box} data-pressure-mode={visual.mode} style={{ '--pressure-accent': visual.accent, backgroundColor: visual.background }} className={`civet-live-card civet-monitor civet-monitor-${prefs.layout} ${compact ? 'civet-monitor-compact' : ''} ${small ? 'civet-monitor-small' : ''} ${blank ? 'civet-live-unready' : ''}`} aria-label="CIVET live pressure">
+  return <section ref={box} data-pressure-mode={visual.mode} style={{ '--pressure-accent': live.state==='not_in_use'?'#9abac5':visual.accent, backgroundColor: live.state==='not_in_use'?'#10212a':visual.background }} className={`civet-live-card civet-monitor civet-monitor-${prefs.layout} ${compact ? 'civet-monitor-compact' : ''} ${small ? 'civet-monitor-small' : ''} ${blank ? 'civet-live-unready' : ''}`} aria-label="CIVET live pressure">
     <span ref={pulseRef} className="civet-pressure-pulse" aria-hidden="true" />
     <header><b>Pelvic pressure</b><div className="civet-monitor-controls"><select aria-label="Pressure card view" value={prefs.layout} onChange={e => change({ layout: e.target.value })}>{Object.entries(layouts).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button aria-pressed={prefs.auto} onClick={() => change({ auto: !prefs.auto })}>Auto zoom: {prefs.auto ? 'on' : 'off'}</button></div></header>
     <div className="civet-monitor-state"><span>{state}</span>{sample?.usable && <small title="Relative to the comfortable reference hold, not maximum strength or orgasm progress">{fmt(sample.level_pct, 0)}% of reference</small>}</div>

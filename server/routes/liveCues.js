@@ -2,8 +2,17 @@ import express from 'express';
 import { TTS_CONTENT_TYPES } from '../services/ttsCore.js';
 import { prepareLiveCueAudioClip, readLiveCueAudioFile } from '../services/liveCueAudioCache.js';
 import { classifyProviderError } from '../../src/lib/providerErrorClassifier.js';
+import {generateLiveCue} from '../services/generatedLiveCue.js';
 
 export const liveCuesRouter = express.Router();
+const generatedAt=new Map();
+liveCuesRouter.post('/generate',async(req,res)=>{
+  const now=Date.now(),key=req.ip;
+  if(now-(generatedAt.get(key)||0)<25000)return res.status(429).json({error:'Generated feedback is resting between observations.'});
+  generatedAt.set(key,now);if(generatedAt.size>100)generatedAt.clear();
+  try {res.json({ok:true,text:await generateLiveCue(req.body||{}),provider:'configured_sarah_ai'});}
+  catch(error){res.status(503).json({error:error.message||'Generated feedback unavailable.'});}
+});
 
 async function prepareInBatches(clips, settings, concurrency = 3) {
   const prepared = new Array(clips.length);

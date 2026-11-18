@@ -190,6 +190,25 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
     };
   }, [enabled, settings?.volume]);
 
+  const speakGenerated = useCallback(async (cue,{context,captureKind,recent,style,canPlay=()=>true}={})=>{
+    const generation=generationRef.current;
+    try {
+      if(!enabled||!canPlay())return {ok:false,reason:'cancelled'};
+      const response=await fetch(apiUrl('/live-cues/generate'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:cue.type,context,captureKind,recent,style}),signal:AbortSignal.timeout(8000)});
+      const payload=await response.json();if(!response.ok)throw Error(payload.error||'Generated feedback unavailable.');
+      const phrase=payload.text;if(!phrase)return {ok:false,reason:'nothing_new'};
+      if(generation!==generationRef.current||!canPlay())return {ok:false,reason:'cancelled'};
+      const generated={...cue,phrase};
+      const audioResponse=await fetch(apiUrl('/live-cues/prepare'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clips:[{type:cue.type,text:phrase}],...settings,ttsProvider:settings?.ttsProvider||loadTTSSettings().ttsProvider}),signal:AbortSignal.timeout(15000)});
+      const prepared=await audioResponse.json();if(!audioResponse.ok||!prepared.clips?.[0])throw Error(prepared.error||'Generated voice audio unavailable.');
+      const decoded=await decodeClip(getAudioContext(),prepared.clips[0]);
+      if(generation!==generationRef.current||!canPlay()||Date.now()-cue.atMs>15000)return {ok:false,reason:'cue_expired',phrase};
+      decodedRef.current.set(`${cue.type}:${phrase}`,decoded);
+      while(decodedRef.current.size>64)decodedRef.current.delete(decodedRef.current.keys().next().value);
+      return {...playCue(generated,{freshnessMs:15000}),phrase,generated:true};
+    }catch(error){setStatus(previous=>({...previous,phase:'error',message:error.message}));return {ok:false,reason:'generation_failed',error:error.message};}
+  },[enabled,getAudioContext,playCue,settings]);
+
   const stop = useCallback(() => {
     try {
       activeSourceRef.current?.stop?.();
@@ -234,8 +253,9 @@ export function useLiveCueAudio({ phrases, settings, enabled = true } = {}) {
     unlock,
     prepare,
     playCue,
+    speakGenerated,
     stop,
     ready: status.phase === "ready",
     decodedCount: status.decoded,
-  }), [audioState, testVoice, decodedCount, prepare, playCue, ready, status, stop, unlock]);
+  }), [audioState, testVoice, decodedCount, prepare, playCue, speakGenerated, ready, status, stop, unlock]);
 }
