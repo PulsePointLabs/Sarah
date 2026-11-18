@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.309",
-  "commit": "feb6048",
-  "commitMessage": "Stop displaying ended sessions as active when OBS is offline",
-  "builtAt": "2026-11-14T20:14:04.473Z"
+  "version": "0.1.310",
+  "commit": "4c09043",
+  "commitMessage": "Expose generated feedback mode in full-screen controls and retain sensible reset defaults",
+  "builtAt": "2026-11-18T01:59:38.180Z"
 };
