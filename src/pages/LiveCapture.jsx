@@ -9948,7 +9948,11 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
               </>
             )}
           </div>
-          {telemetryFocusView && <><PhaseAnnouncementControls bodyExploration={captureIsBodyExploration} controller={phaseAnnouncements} compact /><button type="button" className="mt-2 rounded-lg border border-border px-3 py-2 text-sm" onClick={() => { setTelemetryControlsOpen(false); document.activeElement?.blur(); }}>Hide controls</button></>}
+          {telemetryFocusView && <><LiveEncouragementControls
+            enabled={liveCueSettings.enabled} volume={liveCueSettings.volume} audioState={liveCueAudio.audioState}
+            status={liveCueAudio.status} playback={liveCueEngine.latestCue?.playback} onToggle={toggleLiveEncouragement}
+            onTest={testLiveEncouragement} onVolume={volume=>setLiveCueSettings(previous=>({...previous,volume}))}
+            generationMode={liveCueSettings.generationMode} onGenerationMode={generationMode=>setLiveCueSettings(previous=>({...previous,generationMode}))}/><PhaseAnnouncementControls bodyExploration={captureIsBodyExploration} controller={phaseAnnouncements} compact /><button type="button" className="mt-2 rounded-lg border border-border px-3 py-2 text-sm" onClick={() => { setTelemetryControlsOpen(false); document.activeElement?.blur(); }}>Hide controls</button></>}
           </div>
         </div>
 
@@ -9958,7 +9962,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Custom telemetry dashboard</p>
-                  <p className="mt-1 text-sm text-muted-foreground">Choose visible panels here. Tap any dashboard item to move or resize it.</p>
+                  <p className="mt-1 text-sm text-muted-foreground">Choose visible panels here. Use Edit layout to drag a card or pull its corner; neighboring cards share the space.</p>
                 </div>
                 <button type="button" onClick={() => setTelemetryDashboardOpen(false)} className="rounded-lg bg-muted p-2 text-muted-foreground hover:text-foreground" aria-label="Close dashboard customization">
                   <X className="h-4 w-4" />
@@ -10048,7 +10052,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
                 })}
               </div>
               <div className="mt-5 flex items-center justify-between border-t border-border pt-4">
-                <button type="button" onClick={() => { setTelemetryDashboard(defaultTelemetryDashboard()); setHiddenTelemetryItems([]); localStorage.removeItem("pulsepoint.telemetryViewport.v1"); window.dispatchEvent(new Event("telemetry-layout-reset")); }} className="rounded-lg border border-border px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted">Reset default</button>
+                <button type="button" onClick={() => { setTelemetryDashboard(defaultTelemetryDashboard()); setHiddenTelemetryItems(["metric:Respiration","metric:Chest Motion"]); setTelemetryPreset("custom"); localStorage.removeItem("sarah.telemetry.preset"); localStorage.removeItem("pulsepoint.telemetryViewport.v1"); window.dispatchEvent(new Event("telemetry-layout-reset")); }} className="rounded-lg border border-border px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted">Reset default</button>
                 <button type="button" onClick={() => setTelemetryDashboardOpen(false)} className="rounded-lg bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">Use this dashboard</button>
               </div>
             </div>
