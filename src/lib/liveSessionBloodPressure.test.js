@@ -11,6 +11,16 @@ import {
 const priorReading = { systolic_mm_hg: 132, diastolic_mm_hg: 86 };
 const currentReading = { systolic_mm_hg: 124, diastolic_mm_hg: 80 };
 
+test('telemetry never promotes yesterday’s history or a newly delivered old cuff measurement into a new session',()=>{
+  const startMs=Date.parse('2026-11-17T21:00:00Z'),sessionWindow={startMs,endMs:startMs+60000,sessionId:'new'};
+  const old={...currentReading,measured_at:'2026-11-16T07:00:00Z',received_at:new Date(startMs+10000).toISOString()};
+  assert.equal(selectTelemetryBloodPressure({stored:old,receipt:old,openedAt:startMs,sessionWindow}),null);
+  assert.equal(selectTelemetryBloodPressure({stored:old,openedAt:startMs}),null);
+  const fresh={...currentReading,measured_at:new Date(startMs+20000).toISOString(),received_at:new Date(startMs+20000).toISOString(),session:'new'};
+  assert.equal(selectTelemetryBloodPressure({stored:fresh,sessionReading:fresh,sessionWindow}).state,'session');
+  assert.equal(selectTelemetryBloodPressure({stored:{...fresh,session:'different'},sessionWindow}),null);
+});
+
 test('measurement time determines session membership without pre/post padding or guesses from reception', () => {
   const startMs=Date.parse('2026-10-22T18:00:00Z'), endMs=startMs+60000;
   const window={startMs,endMs,sessionId:'new',pauses:[{pausedAt:new Date(startMs+20000).toISOString(),resumedAt:new Date(startMs+30000).toISOString()}]};
@@ -30,7 +40,7 @@ test("full telemetry distinguishes a fresh cuff receipt, confirmed history, and 
   assert.equal(selectTelemetryBloodPressure({ receipt, stored: receipt }).state, "history");
   assert.equal(selectTelemetryBloodPressure({ receipt, stored: receipt, sessionReading: receipt }).state, "session");
   assert.equal(selectTelemetryBloodPressure({ receipt: { ...receipt, measured_at: null }, stored: old }).state, "clock_unknown");
-  assert.equal(selectTelemetryBloodPressure({ receipt, stored: old, openedAt: Date.parse(receivedAt) + 1 }).reading, old);
+  assert.equal(selectTelemetryBloodPressure({ receipt, stored: old, openedAt: Date.parse(receivedAt) + 1 }), null);
 });
 
 test("only a tightly bounded future cuff timestamp after the fall transition is corrected", () => {

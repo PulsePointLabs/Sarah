@@ -50,7 +50,19 @@ export function correctOmronFutureDstReading(reading, timeZone = "America/New_Yo
   };
 }
 
-export function selectTelemetryBloodPressure({ receipt, stored, sessionReading, openedAt = 0 } = {}) {
+export function selectTelemetryBloodPressure({ receipt, stored, sessionReading, openedAt = 0, sessionWindow } = {}) {
+  // Telemetry is a current observation/session, not the lifetime BP history.
+  // Receipt time cannot make an old measurement relevant to a new session.
+  const inContext=reading=>{
+    if(!reading)return null;
+    if(sessionWindow)return bloodPressureFallsInSession(reading,sessionWindow)?reading:null;
+    if(openedAt>0){
+      const measured=Date.parse(reading.measured_at||'');
+      if(!Number.isFinite(measured)||(reading.timestamp_source||reading.raw?.timestamp_source)==='received_at'||measured<openedAt)return null;
+    }
+    return reading;
+  };
+  receipt=inContext(receipt);stored=inContext(stored);sessionReading=inContext(sessionReading);
   if (!usableBloodPressure(receipt) && !usableBloodPressure(stored) && !usableBloodPressure(sessionReading)) return null;
   const sameAsStored = receipt && [stored, sessionReading].some((reading) => reading && bloodPressureKey(reading) === bloodPressureKey(receipt));
   const receivedAt = Date.parse(receipt?.received_at || "");

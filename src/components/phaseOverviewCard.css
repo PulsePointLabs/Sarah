@@ -4,3 +4,5 @@
 .phase-overview-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px;flex:1;min-height:0}
 .phase-overview-values>div{display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:0;min-height:0;border:1px solid #385461;border-radius:7px;container-type:size;gap:2px}
 .phase-overview-values span{font-size:var(--tile-font,12px);line-height:1}.phase-overview-values strong{font-size:clamp(17px,min(28cqw,52cqh),100px);font-variant-numeric:tabular-nums;line-height:1;color:#9de4dc}
+
+@container (min-width:500px){.phase-overview-values{grid-template-columns:repeat(4,minmax(0,1fr))}}

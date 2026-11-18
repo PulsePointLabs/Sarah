@@ -18,7 +18,7 @@ function Reading({ value, unit = 'kPa', label, primary = false }) {
 function LivePlot({ snapshot, zoom }) {
   const ref = useRef(null), [size, setSize] = useState({ width: 600, height: 160 });
   useLayoutEffect(() => { const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height })); observer.observe(ref.current); return () => observer.disconnect(); }, []);
-  const { width, height } = size, short = height < 65, left = 28, right = Math.max(left + 10, width - 8), top = short ? 4 : 8, bottom = Math.max(top + 15, height - (short ? 6 : 28));
+  const { width, height } = size, short = height < 65, left = 35, right = Math.max(left + 10, width - 8), top = short ? 12 : 20, bottom = Math.max(top + 15, height - (short ? 6 : 28));
   const start = snapshot.end - zoom.seconds, x = t => left + (t - start) / zoom.seconds * (right - left);
   const y = value => bottom - (value - zoom.min) / Math.max(1, zoom.max - zoom.min) * (bottom - top);
   let previous = null;
@@ -67,7 +67,7 @@ export default function CivetLiveCard({ live, onSetup, expanded = false, compact
   const average = <Reading value={blank ? null : snapshot.average} label="Average · last 30s" />;
   const max = <Reading value={snapshot.sessionMax} label={`Max · ${sessionLabel}`} />;
   const portalRoot = () => box.current?.ownerDocument.fullscreenElement || box.current?.ownerDocument.body || document.body;
-  return <section ref={box} data-pressure-mode={visual.mode} style={{ '--pressure-accent': live.state==='not_in_use'?'#9abac5':visual.accent, backgroundColor: live.state==='not_in_use'?'#10212a':visual.background }} className={`civet-live-card civet-monitor civet-monitor-${prefs.layout} ${compact ? 'civet-monitor-compact' : ''} ${small ? 'civet-monitor-small' : ''} ${blank ? 'civet-live-unready' : ''}`} aria-label="CIVET live pressure">
+  return <section ref={box} data-pressure-idle={!sample} data-pressure-mode={visual.mode} style={{ '--pressure-accent': !sample?'#9abac5':visual.accent, backgroundColor: !sample?'#10212a':visual.background }} className={`civet-live-card civet-monitor civet-monitor-${prefs.layout} ${compact ? 'civet-monitor-compact' : ''} ${small ? 'civet-monitor-small' : ''} ${blank ? 'civet-live-unready' : ''}`} aria-label="CIVET live pressure">
     <span ref={pulseRef} className="civet-pressure-pulse" aria-hidden="true" />
     <header><b>Pelvic pressure</b><div className="civet-monitor-controls"><select aria-label="Pressure card view" value={prefs.layout} onChange={e => change({ layout: e.target.value })}>{Object.entries(layouts).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button aria-pressed={prefs.auto} onClick={() => change({ auto: !prefs.auto })}>Auto zoom: {prefs.auto ? 'on' : 'off'}</button></div></header>
     <div className="civet-monitor-state"><span>{state}</span>{sample?.usable && <small title="Relative to the comfortable reference hold, not maximum strength or orgasm progress">{fmt(sample.level_pct, 0)}% of reference</small>}</div>

@@ -1781,6 +1781,9 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const [selectedTelemetryPanel, setSelectedTelemetryPanel] = useState("");
   const telemetryDisplayRef = useRef(null);
   const [telemetryFullscreen,setTelemetryFullscreen] = useState(false);
+  const [telemetryChromeVisible,setTelemetryChromeVisible]=useState(false);
+  const telemetryCleanFullscreen=telemetryFullscreen&&!telemetryChromeVisible;
+  useEffect(()=>{if(telemetryFullscreen)setTelemetryChromeVisible(false);},[telemetryFullscreen]);
   const toggleTelemetryFullscreen = useCallback(async()=>{
     try {
       if(isNativeSarah()) {
@@ -4227,7 +4230,13 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     receipt: receiptForTelemetry,
     stored: storedTelemetryBp,
     sessionReading: latestBpReading,
-    openedAt: bpCaptureOpenedAtRef.current - 30 * 60 * 1000,
+    openedAt: bpCaptureOpenedAtRef.current,
+    sessionWindow: liveSession?.active ? {
+      startMs:Date.parse(liveSession.startedAt),endMs:Date.now(),sessionId:liveSession.activeSessionId,
+      pauses:liveSession.pauseIntervals||[],
+    } : phoneCaptureRef.current?.startedAt ? {
+      startMs:Date.parse(phoneCaptureRef.current.startedAt),endMs:Date.now(),sessionId:phoneCaptureRef.current.id,
+    } : undefined,
   });
   const displayedBp = telemetryBp?.reading;
   const latestBpValue = displayedBp
@@ -9825,7 +9834,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       {(telemetryFocusView || (!focusView && captureTab === "telemetry") || (!focusView && captureTab === "session" && launchActive && detailedTelemetryOpen)) && <div ref={telemetryDisplayRef} data-telemetry-fullscreen={telemetryFullscreen}
         onPointerDown={(event) => { if (!event.target.closest("[data-telemetry-header]")) setTelemetryControlsOpen(false); }}
         className={telemetryFocusView
-          ? "telemetry-dashboard-surface fixed inset-0 z-[60] !m-0 flex h-[100dvh] flex-col overflow-hidden bg-card p-1"
+          ? `telemetry-dashboard-surface ${telemetryCleanFullscreen?"telemetry-fullscreen-clean":""} fixed inset-0 z-[60] !m-0 flex h-[100dvh] flex-col overflow-hidden bg-card p-1`
           : `rounded-xl border border-border bg-card ${distanceTelemetryView ? "space-y-6 p-5 md:p-6" : "space-y-4 p-4"}`}
         style={telemetryFocusView ? {
           "--background": "204 46% 7%",
@@ -9837,25 +9846,21 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           "--border": "199 28% 25%",
         } : undefined}
       >
-        <div className="flex shrink-0 items-center gap-2 px-1 text-sm" aria-label="Telemetry presets"><label>View <select aria-label="Telemetry view preset" className="rounded border border-border bg-card px-2 py-1" value={telemetryPreset} onChange={e=>applyTelemetryPreset(e.target.value)}><option value="custom" disabled>Choose preset</option><option value="balanced">Balanced</option><option value="cardiac">Cardiac focus</option><option value="response">Physiological response</option><option value="bedside">Large bedside numbers</option><option value="device">Pressure + Howl</option></select></label></div>
-        <div data-telemetry-header  className={`relative flex min-w-0 flex-wrap items-center justify-between gap-3 ${telemetryFocusView ? "shrink-0 pb-2 z-30" : ""}`}>
+        {telemetryCleanFullscreen&&<div className="telemetry-minimal-clock"><button aria-label="Show full-screen controls" title="Tap time to edit or exit full screen" onClick={()=>setTelemetryChromeVisible(true)}><time>{new Date(liveHealthNowMs).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</time><span aria-label="Session elapsed">{cameraRecording?fmtMmSs(getCurrentSessionTime()):launchActive&&resolveLiveSessionStartMs()?fmtMmSs(Math.max(0,(liveHealthNowMs-resolveLiveSessionStartMs())/1000)):'00:00'}</span></button></div>}
+        <div hidden={telemetryCleanFullscreen} className="flex shrink-0 items-center gap-2 px-1 text-sm" aria-label="Telemetry presets"><label>View <select aria-label="Telemetry view preset" className="rounded border border-border bg-card px-2 py-1" value={telemetryPreset} onChange={e=>applyTelemetryPreset(e.target.value)}><option value="custom" disabled>Choose preset</option><option value="balanced">Balanced</option><option value="cardiac">Cardiac focus</option><option value="response">Physiological response</option><option value="bedside">Large bedside numbers</option><option value="device">Pressure + Howl</option></select></label></div>
+        <div data-telemetry-header hidden={telemetryCleanFullscreen} className={`relative flex min-w-0 flex-wrap items-center justify-between gap-3 ${telemetryFocusView ? "shrink-0 pb-2 z-30" : ""}`}>
           <h3 className={`${telemetryFocusView ? "text-base md:text-xl" : distanceTelemetryView ? "text-lg" : "text-xs"} font-semibold uppercase tracking-wider text-primary flex min-w-0 flex-wrap items-center gap-2`}>
             <CircleDot className={distanceTelemetryView ? "w-6 h-6" : "w-4 h-4"} /> Live Telemetry
 
             {telemetryFocusView && <span className="ml-2 whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{new Date(liveHealthNowMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}
           </h3>
-          <div role="status" aria-label="Latest blood pressure" className="flex flex-wrap items-center gap-x-2 rounded-lg border border-border bg-background px-2 py-1 text-sm">
-            <span className="font-semibold">BP</span>
-            <span className="font-bold tabular-nums">{latestBpValue}{displayedBp ? " mmHg" : ""}</span>
-            <span className={telemetryBp?.state === "pending" || telemetryBp?.state === "clock_unknown" ? "text-amber-500" : "text-muted-foreground"}>{latestBpHelper}</span>
-          </div>
           {telemetryFocusView && cameraRecording && <Button type="button" variant="destructive" size="sm" onClick={() => stopCameraCaptureRef.current?.()}>Recording locally · Stop &amp; Save</Button>}
           {telemetryFocusView && !cameraRecording && sharedCameraCapture?.phase === "recording" && (
             <span className="rounded-lg border border-red-500/50 px-2 py-1 text-sm font-semibold text-red-500">Recording in the main window</span>
           )}
           {telemetryFocusView && <div className="flex flex-wrap items-center gap-3"><span aria-label="Session timer" className="whitespace-nowrap font-mono text-sm font-medium tracking-normal text-muted-foreground md:text-xl">{cameraRecording ? fmtMmSs(getCurrentSessionTime())
             : sharedCameraCapture?.phase === "recording" ? fmtMmSs(Math.max(0, (liveHealthNowMs - Date.parse(sharedCameraCapture.startedAt)) / 1000))
-            : launchActive && resolveLiveSessionStartMs() ? fmtMmSs(Math.max(0, (liveHealthNowMs - resolveLiveSessionStartMs()) / 1000)) : "00:00"}</span><button type="button" onClick={toggleTelemetryFullscreen} className="rounded-lg border border-border px-3 py-2 text-sm">{telemetryFullscreen?'Exit full screen':'Full screen (F)'}</button><button type="button" onClick={openTelemetryScreen} className="rounded-lg border border-border px-3 py-2 text-sm">Second screen</button><button type="button" aria-label="Telemetry controls" aria-expanded={telemetryControlsOpen} onClick={() => setTelemetryControlsOpen(true)} className="rounded-lg border border-border px-2 py-1 text-sm">Controls</button></div>}
+            : launchActive && resolveLiveSessionStartMs() ? fmtMmSs(Math.max(0, (liveHealthNowMs - resolveLiveSessionStartMs()) / 1000)) : "00:00"}</span><button type="button" onClick={toggleTelemetryFullscreen} className="rounded-lg border border-border px-3 py-2 text-sm">{telemetryFullscreen?'Exit full screen':'Full screen (F)'}</button>{telemetryFullscreen&&<button type="button" onClick={()=>setTelemetryChromeVisible(false)} className="rounded-lg border border-border px-3 py-2 text-sm">Hide controls</button>}<button type="button" onClick={openTelemetryScreen} className="rounded-lg border border-border px-3 py-2 text-sm">Second screen</button><button type="button" aria-label="Telemetry controls" aria-expanded={telemetryControlsOpen} onClick={() => setTelemetryControlsOpen(true)} className="rounded-lg border border-border px-2 py-1 text-sm">Controls</button></div>}
           <div hidden={telemetryFocusView && !telemetryControlsOpen} className={telemetryFocusView ? "telemetry-top-controls" : ""}>
             <BloodPressureCuffControls label="Telemetry cuff controls" listening={bpOmronListening} busy={bpOmronActionInFlightRef.current}
         message={bpCapture.error || bpCapture.cuffConnectionMessage || (bpOmronListening ? "Waiting for cuff." : "Cuff disconnected.")}
@@ -10059,7 +10064,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           </div>
         )}
 
-        <ViewportTelemetryGrid hiddenItems={hiddenTelemetryItems} onHide={id => setTelemetryItemVisible(id, false)} enabled={focusView} selected={selectedTelemetryPanel} onSelect={setSelectedTelemetryPanel}>
+        <ViewportTelemetryGrid immersive={telemetryCleanFullscreen} hiddenItems={hiddenTelemetryItems} onHide={id => setTelemetryItemVisible(id, false)} enabled={focusView} selected={selectedTelemetryPanel} onSelect={setSelectedTelemetryPanel}>
 
         {telemetryPanelEnabled("notices") && telemetryNoticesEnabled && latestTelemetryNotice && !focusView && renderTelemetryDashboardPanel("notices", (
           <div
@@ -10378,15 +10383,15 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
                   <XAxis dataKey="time" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={28} />
                   {captureIsBodyExploration ? <>
-                    <YAxis yAxisId="hrDelta" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} width={36} />
-                    <YAxis yAxisId="rmssd" orientation="right" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} width={36} />
+                    <YAxis yAxisId="hrDelta" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} width={52} />
+                    <YAxis yAxisId="rmssd" orientation="right" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} width={52} />
                     <Tooltip content={<ChartTooltip />} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                     <ReferenceLine yAxisId="hrDelta" y={0} stroke="#94a3b8" strokeDasharray="5 5" />
                     <Line yAxisId="hrDelta" type="monotone" dataKey="hrDelta" name="HR change (bpm)" stroke="#fb7185" strokeWidth={2.5} dot={false} />
                     <Line yAxisId="rmssd" type="monotone" dataKey="hrvRmssd" name="RMSSD (ms)" stroke="#22d3ee" strokeWidth={2} dot={false} />
                   </> : <>
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} width={36} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} width={52} />
                   <Tooltip content={<ChartTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <ReferenceLine y={60} stroke="#f59e0b" strokeDasharray="5 5" opacity={0.65} />
@@ -10420,8 +10425,8 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
                   <XAxis dataKey="time" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={28} />
-                  <YAxis yAxisId="resp" domain={[0, "auto"]} tick={{ fontSize: 11, fill: "#14b8a6" }} tickLine={false} axisLine={false} width={36} />
-                  <YAxis yAxisId="load" orientation="right" domain={[0, 100]} tick={{ fontSize: 11, fill: "#38bdf8" }} tickLine={false} axisLine={false} width={36} />
+                  <YAxis yAxisId="resp" domain={[0, "auto"]} tick={{ fontSize: 11, fill: "#14b8a6" }} tickLine={false} axisLine={false} width={52} />
+                  <YAxis yAxisId="load" orientation="right" domain={[0, 100]} tick={{ fontSize: 11, fill: "#38bdf8" }} tickLine={false} axisLine={false} width={52} />
                   <Tooltip content={<ChartTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Area yAxisId="load" type="monotone" dataKey="motionLoad" name="Chest motion load" stroke="#38bdf8" fill="url(#motionLoadFill)" strokeWidth={2} dot={false} connectNulls />
@@ -10441,8 +10446,8 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
             <LineChart data={telemetryHistory} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.45} />
               <XAxis dataKey="time" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={28} />
-              <YAxis yAxisId="hr" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} domain={["dataMin - 4", "dataMax + 4"]} width={distanceTelemetryView ? 44 : 34} />
-              <YAxis yAxisId="hrv" orientation="right" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "#22d3ee" }} tickLine={false} axisLine={false} domain={[0, "auto"]} width={distanceTelemetryView ? 44 : 34} />
+              <YAxis yAxisId="hr" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} domain={["dataMin - 4", "dataMax + 4"]} width={52} />
+              <YAxis yAxisId="hrv" orientation="right" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "#22d3ee" }} tickLine={false} axisLine={false} domain={[0, "auto"]} width={52} />
               <YAxis yAxisId="watch" hide domain={[0, 100]} />
               <Tooltip content={<ChartTooltip />} />
               <Legend wrapperStyle={{ fontSize: distanceTelemetryView ? 14 : 11 }} />
@@ -10475,7 +10480,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
               <LineChart data={telemetryHistory} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.45} />
                 <XAxis dataKey="time" tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={28} />
-                <YAxis tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} domain={[0, 100]} width={distanceTelemetryView ? 44 : 34} />
+                <YAxis tick={{ fontSize: distanceTelemetryView ? 13 : 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} domain={[0, 100]} width={52} />
                 <Tooltip content={<ChartTooltip />} />
                 <Legend wrapperStyle={{ fontSize: distanceTelemetryView ? 14 : 11 }} />
                 <Line type="monotone" dataKey="left" name={emgNames[0] || (usingPerinealEmgConfig ? "Perineal" : "Left")} stroke="hsl(var(--primary))" strokeWidth={2.5} dot={false} connectNulls />

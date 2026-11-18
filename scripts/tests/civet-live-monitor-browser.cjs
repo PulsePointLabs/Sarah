@@ -34,7 +34,7 @@ try { playwright = require('playwright'); } catch { playwright = require(path.jo
     assert.match(await wide.innerText(), /Last completed pulse/);
     await page.getByRole('button', { name: 'missing', exact: true }).click();
     assert.equal(await wide.locator('.civet-pressure-pulse').evaluate(element => element.getAnimations().length), 0);
-    assert.match(await wide.innerText(), /Signal lost/);
+    assert.match(await wide.innerText(), /No fresh pressure signal/);
     assert.match(await wide.locator('.civet-reading-primary').innerText(), /—/);
     assert.ok((await wide.locator('svg path').getAttribute('d')).length > 0);
     await wide.getByRole('button', { name: 'Details', exact: true }).click();
