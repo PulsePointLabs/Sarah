@@ -1693,6 +1693,9 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const [liveSession, setLiveSession] = useState(null);
   const [activeSessionDoc, setActiveSessionDoc] = useState(null);
   const [connected, setConnected] = useState(false);
+  const [sessionSyncedAt,setSessionSyncedAt]=useState(0);
+  const sessionDetailsDirty=useRef(false);
+  const sessionStartInFlight=useRef(false);
   const [telemetryHistory, setTelemetryHistory] = useState([]);
   const localObservationRef = useRef({ key: null, startedAt: null, lastAt: null });
   const localHrDerivationRef = useRef(new Map());
@@ -3759,14 +3762,16 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
 
   useEffect(() => {
     let disposed = false;
-    let refreshGeneration = 0;
+    let refreshGeneration = 0, refreshPending=false;
     let appStateHandle = null;
     const refresh = () => {
+    if(disposed||refreshPending)return;refreshPending=true;
     const generation = ++refreshGeneration;
-    fetch(apiUrl("/live-capture/status"), { cache: "no-store" }).then((res) => res.json()).then((data) => {
+    fetch(apiUrl("/live-capture/status"), { cache: "no-store",signal:AbortSignal.timeout(5000) }).then((res) => {if(!res.ok)throw Error('Session status unavailable');return res.json();}).then((data) => {
       if (disposed || generation !== refreshGeneration) return;
       serverMonitoringSnapshotRef.current = isPhoneAcquisition()?null:data.monitoring;
       serverMonitoringRef.current = !isPhoneAcquisition() && ownsMonitoringHistory(data.monitoring) && !phoneCaptureRef.current;
+      setSessionSyncedAt(Date.now());
       setStatus(data);
       const nextHr = isPhoneAcquisition()?latestHrRef.current:preferLiveHrTelemetry(data.hr?.latestTelemetry || null, latestHrRef.current);
       const nextEmg = isPhoneAcquisition()?null:data.emg?.latestTelemetry || null;
@@ -3785,7 +3790,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           serverMonitoringSessionRef.current = monitor.sessionId;
           setTelemetryHistory(prev => mergeMonitoringPoints(sameSession ? prev : [], monitor.history));
         }).catch(() => {});
-    }).catch(() => {});
+    }).catch(() => {}).finally(()=>{refreshPending=false;});
     };
     refresh();
 
@@ -3793,10 +3798,11 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     import("@capacitor/app").then(({ App }) => App.addListener("appStateChange", ({ isActive }) => {
       if (isActive) events.resume();
     })).then(handle => { if (disposed) handle.remove(); else appStateHandle = handle; }).catch(() => {});
-    events.onopen = () => setConnected(true);
+    events.onopen = () => {setConnected(true);refresh();};
     events.onerror = () => setConnected(false);
     events.addEventListener("status", (event) => {
       const data = JSON.parse(event.data);
+      setSessionSyncedAt(Date.now());
       serverMonitoringSnapshotRef.current = isPhoneAcquisition()?null:data.monitoring;
       serverMonitoringRef.current = !isPhoneAcquisition() && ownsMonitoringHistory(data.monitoring) && !phoneCaptureRef.current;
       const nextHr = isPhoneAcquisition()?latestHrRef.current:preferLiveHrTelemetry(data.hr?.latestTelemetry || null, latestHrRef.current);
@@ -3855,31 +3861,27 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     events.addEventListener("recording", (event) => setRecording(JSON.parse(event.data)));
     events.addEventListener("recording_finalized", (event) => setRecording(JSON.parse(event.data)));
     events.addEventListener("files", (event) => setFiles(JSON.parse(event.data)));
-    events.addEventListener("live_session", (event) => setLiveSession(JSON.parse(event.data)));
+    events.addEventListener("live_session", (event) => {setSessionSyncedAt(Date.now());setLiveSession(JSON.parse(event.data));});
     events.addEventListener("live_session_imported", (event) => {
       setLiveSession((prev) => ({ ...(prev || {}), lastImportedAt: new Date().toISOString(), lastImportResult: JSON.parse(event.data) }));
     });
-    return () => { disposed = true; events.close(); appStateHandle?.remove?.(); };
+    const statusFallback=window.setInterval(refresh,3000);
+    return () => { disposed = true; window.clearInterval(statusFallback);events.close(); appStateHandle?.remove?.(); };
   }, [maybeTriggerHeartbeatFromTelemetry]);
 
+  useEffect(() => {localStorage.setItem('pulsepoint.captureKind',captureKind);},[captureKind]);
   useEffect(() => {
-    localStorage.setItem("pulsepoint.captureKind", captureKind);
-    if (detachedTelemetry) return;
-    setCaptureKindError("");
-    fetch(apiUrl("/live-capture/capture-kind"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ captureKind }),
-    })
-      .then(async (response) => {
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || "Could not update capture type.");
-        if (data.session) setLiveSession((prev) => ({ ...(prev || {}), ...data.session }));
-      })
-      .catch((error) => {
-        setCaptureKindError(error?.message || "Could not update capture type.");
-      });
-  }, [captureKind, detachedTelemetry]);
+    if(liveSession?.captureKind && !phoneCaptureRef.current)setCaptureKind(liveSession.captureKind);
+  },[liveSession?.captureKind]);
+  const chooseCaptureKind=async kind=>{
+    if(liveSession?.active || cameraRecording)return;
+    setCaptureKind(kind);setCaptureKindError('');
+    try {
+      const response=await fetch(apiUrl('/live-capture/capture-kind'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({captureKind:kind})});
+      const data=await response.json();if(!response.ok)throw Error(data.error||'Session type could not sync.');
+      setLiveSession(data.session);setSessionSyncedAt(Date.now());
+    } catch(error){setCaptureKindError(`Session type is local until the server reconnects: ${error.message}`);}
+  };
 
   useEffect(() => {
     localStorage.setItem("pulsepoint.captureMode", captureMode);
@@ -5870,24 +5872,35 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
     try {
       const patch={title:sessionTitle.trim(),notes:sessionNotes};
       await liveRecordApi.update(liveSession.activeSessionId,patch);
-      setActiveSessionDoc(old=>({...old,...patch}));setSessionDetailsStatus('Session title and notes saved.');
+      setActiveSessionDoc(old=>({...old,...patch}));sessionDetailsDirty.current=false;setSessionDetailsStatus('Session title and notes saved.');
     }catch(error){setSessionDetailsStatus(`Details were not saved: ${error.message}`);}
   };
   useEffect(()=>{
     if(!liveSession?.active || !liveSession.activeSessionId || !pendingSessionDetails.current)return;
     const details=pendingSessionDetails.current;pendingSessionDetails.current=null;
-    liveRecordApi.update(liveSession.activeSessionId,details).then(()=>setSessionDetailsStatus('Session title and notes saved.')).catch(error=>setSessionDetailsStatus(`Details were not saved: ${error.message}. Use Save session details to retry.`));
+    liveRecordApi.update(liveSession.activeSessionId,details).then(()=>{sessionDetailsDirty.current=false;setSessionDetailsStatus('Session title and notes saved.');}).catch(error=>setSessionDetailsStatus(`Details were not saved: ${error.message}. Use Save session details to retry.`));
   },[liveSession?.active,liveSession?.activeSessionId,liveRecordApi]);
   useEffect(()=>{
-    if(!activeSessionDoc?.id || !liveSession?.active || sessionTitle || sessionNotes)return;
+    if(!activeSessionDoc?.id || !liveSession?.active || sessionDetailsDirty.current)return;
     setSessionTitle(activeSessionDoc.title||'');setSessionNotes(activeSessionDoc.notes||'');
-  },[activeSessionDoc?.id,liveSession?.active]);
+  },[activeSessionDoc?.id,activeSessionDoc?.title,activeSessionDoc?.notes,liveSession?.active]);
   const startSessionRecording = async () => {
-    if(launchState.busy)return;
-    pendingSessionDetails.current={...(sessionTitle.trim()?{title:sessionTitle.trim()}:{}),...(sessionNotes?{notes:sessionNotes}:{})};
-    setSessionDetailsStatus('Details will be attached when Sarah confirms the new session.');
+    if(launchState.busy||sessionStartInFlight.current)return;
+    sessionStartInFlight.current=true;
+    const draftDetails={...(sessionTitle.trim()?{title:sessionTitle.trim()}:{}),...(sessionNotes?{notes:sessionNotes}:{})};
+    setSessionDetailsStatus('Checking the shared session…');
     try {
-      if(!recordingTransportActive){
+      const check=await fetch(apiUrl('/live-capture/status'),{cache:'no-store',signal:AbortSignal.timeout(5000)});
+      if(!check.ok)throw Error('Cannot verify the shared session. Reconnect to Sarah before starting.');
+      const shared=await check.json();setSessionSyncedAt(Date.now());setStatus(shared);setRecording(shared.hr?.recording||null);setLiveSession(shared.session||null);
+      if(shared.session?.active){
+        pendingSessionDetails.current=null;sessionDetailsDirty.current=false;
+        setSessionDetailsStatus('Joined the existing shared session. Controls and telemetry follow the server.');
+        setLaunchState(prev=>({...prev,busy:false,error:'',message:'Joined the existing shared session. Controls and telemetry follow the server.'}));return;
+      }
+      pendingSessionDetails.current=draftDetails;
+      setSessionDetailsStatus('Details will be attached when Sarah confirms the new session.');
+      if(!shared.hr?.recording?.active){
         if(!obsReady)throw Error('OBS is not connected. Open OBS on the recording computer, or use phone / browser camera instead.');
         if(!liveSession?.active){
           const reply=await fetch(apiUrl('/live-capture/capture-kind'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({captureKind})});
@@ -5913,6 +5926,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       }
       throw Error('OBS/Sarah did not confirm recording. Check OBS before proceeding; live heart rate alone does not mean a session is recording.');
     }catch(error){setLaunchState(prev=>({...prev,busy:false,error:error.message}));}
+    finally{sessionStartInFlight.current=false;}
   };
 
   const setLaunchStep = useCallback((label, state = "active") => {
@@ -7837,8 +7851,9 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
       </nav>}
       {!focusView && captureTab === "session" && (
         <LiveSessionConsole recording={recording} session={liveSession} camera={displayCameraRecording?{...cameraCapture,phase:'recording'}:cameraCapture} obsConnected={obsReady}
-          captureKind={liveSession?.active?liveSession.captureKind:captureKind} onKindChange={setCaptureKind}
-          title={sessionTitle} notes={sessionNotes} onTitleChange={setSessionTitle} onNotesChange={setSessionNotes}
+          captureKind={liveSession?.active?liveSession.captureKind:captureKind} onKindChange={chooseCaptureKind}
+          sync={{fresh:Date.now()-sessionSyncedAt<10000,streaming:connected,sessionId:liveSession?.active?liveSession.activeSessionId:null}}
+          title={sessionTitle} notes={sessionNotes} onTitleChange={value=>{sessionDetailsDirty.current=true;setSessionTitle(value);}} onNotesChange={value=>{sessionDetailsDirty.current=true;setSessionNotes(value);}}
           onSave={saveSessionDetails} onStart={startSessionRecording} onCamera={()=>setCaptureTab('camera')}
           busy={launchState.busy} error={launchState.error||captureKindError} metadataStatus={sessionDetailsStatus}
           hrReady={h10Recent} civetEnabled={civetEnabled} onCivetChange={setCivetEnabled}/>
@@ -8195,7 +8210,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
         <label className="inline-flex items-center gap-2 text-sm font-medium">
           Record as
           <select aria-label="Capture type" className="rounded-md border border-border bg-card px-3 py-2" value={captureKind} disabled={phoneCaptureBusy || Boolean(liveSession?.active)}
-            onChange={event => setCaptureKind(event.target.value)}>
+            onChange={event => chooseCaptureKind(event.target.value)}>
             {CAPTURE_KINDS.map(kind => <option key={kind.value} value={kind.value}>{kind.label}</option>)}
           </select>
         </label>
@@ -8231,7 +8246,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           captureKinds={CAPTURE_KINDS}
           obsRequired={obsPreferred}
           onOpenSetup={() => setCaptureTab("devices")}
-          onCaptureKindChange={setCaptureKind}
+          onCaptureKindChange={chooseCaptureKind}
           onStart={() => startFromLaunchpad().catch((error) => {
             toast({
               title: "Live Capture launch paused",
@@ -8408,7 +8423,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
                     key={kind.value}
                     type="button"
                     disabled={recordingTransportActive}
-                    onClick={() => setCaptureKind(kind.value)}
+                    onClick={() => chooseCaptureKind(kind.value)}
                     className={`rounded-md px-2.5 py-1.5 text-sm font-semibold ${captureKind === kind.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-background"}`}
                   >
                     {kind.label}

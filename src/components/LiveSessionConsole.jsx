@@ -3,11 +3,12 @@ import { describeSessionRecording } from '../lib/liveSessionState.js';
 
 export const sessionRecordingState=describeSessionRecording;
 
-export default function LiveSessionConsole({ recording, session, camera, obsConnected=true, captureKind, onKindChange, title, notes, onTitleChange, onNotesChange, onSave, onStart, onCamera, busy, error, metadataStatus, hrReady, civetEnabled, onCivetChange }) {
+export default function LiveSessionConsole({ recording, session, camera, sync, obsConnected=true, captureKind, onKindChange, title, notes, onTitleChange, onNotesChange, onSave, onStart, onCamera, busy, error, metadataStatus, hrReady, civetEnabled, onCivetChange }) {
   const [saving,setSaving]=useState(false);
   const state=sessionRecordingState({recording,session,camera,obsConnected});
   const active=!!(recording?.active||session?.active||camera?.phase==='recording');
   return <section className="space-y-4 rounded-2xl border border-border bg-card p-4" aria-label="Session recording">
+    {sync&&<p role="status" className={`text-sm ${sync.fresh?"text-primary":"text-amber-500"}`}>{sync.fresh?`Shared server · ${sync.streaming?"live updates":"polling every 3 seconds"}${sync.sessionId?` · session ${sync.sessionId.slice(0,8)}`:" · no active session"}`:"Server sync lost · session state may be out of date"}</p>}
     <div role="status" aria-live="polite"><h2 className={`text-xl font-bold ${state.tone}`}>{state.label}</h2><p className="text-sm">{state.detail}</p>
       {session?.active && <p className="text-sm">{session.captureKind==='body_exploration'?'Body exploration':'Sexual session'} · started {session.startedAt?new Date(session.startedAt).toLocaleTimeString():'now'}</p>}
       {recording?.filename && recording.active && <p className="break-all text-xs text-muted-foreground">{recording.filename}</p>}
@@ -19,7 +20,7 @@ export default function LiveSessionConsole({ recording, session, camera, obsConn
     <label className="block text-sm font-medium">Session notes<textarea aria-label="Session notes" className="mt-1 w-full rounded-lg border border-border bg-background p-2" value={notes} onChange={e=>onNotesChange(e.target.value)} placeholder="Plans, context, observations…" rows={3}/></label>
     <div className="flex flex-wrap gap-3 text-sm"><span>{hrReady?'H10 / heart rate: receiving':'Heart rate: waiting for fresh readings'}</span><label className="inline-flex items-center gap-2"><input type="checkbox" checked={civetEnabled} onChange={e=>onCivetChange(e.target.checked)}/>Use CIVET pelvic pressure for this session</label></div>
     <div className="flex flex-wrap gap-2">
-      {!recording?.active && camera?.phase!=='recording' && <button type="button" disabled={busy||session?.importing} onClick={onStart} className="rounded-lg bg-primary px-5 py-3 font-bold text-primary-foreground disabled:opacity-50">{busy?'Starting…':session?.active?'Resume OBS recording':'Start session + OBS recording'}</button>}
+      {!recording?.active && camera?.phase!=='recording' && <button type="button" disabled={busy||session?.importing} onClick={onStart} className="rounded-lg bg-primary px-5 py-3 font-bold text-primary-foreground disabled:opacity-50">{busy?'Starting…':session?.active?'Join active session':'Start session + OBS recording'}</button>}
       <button type="button" onClick={onCamera} className="rounded-lg border border-border px-3 py-2">Use phone / browser camera instead</button>
       {session?.active && <button type="button" disabled={saving} onClick={async()=>{setSaving(true);try{await onSave();}finally{setSaving(false);}}} className="rounded-lg border border-border px-3 py-2">{saving?'Saving…':'Save session details'}</button>}
     </div>
