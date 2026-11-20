@@ -8,3 +8,14 @@ export function sortVideoRecords(records) {
   return [...records].sort((a,b) => String(b.date || '').slice(0,10).localeCompare(String(a.date || '').slice(0,10))
     || time(b) - time(a) || String(b.created_date || '').localeCompare(String(a.created_date || '')));
 }
+
+export function videoRecordDuration(record) {
+  if (Number(record.duration_minutes)>0) return `${Number(record.duration_minutes)}m`;
+  for(const value of [record.capture_active_duration_seconds,record.capture_wall_duration_seconds]) {
+    if(value!=null && Number.isFinite(Number(value)) && Number(value)>=0) {
+      const seconds=Number(value);
+      return seconds<60 ? `${Math.round(seconds)}s` : `${Math.round(seconds/60)}m`;
+    }
+  }
+  return '';
+}

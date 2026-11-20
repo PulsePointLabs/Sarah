@@ -6,12 +6,14 @@ import VideoSyncPlayer from "../components/VideoSyncPlayer";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Activity, AlertCircle, ArrowLeft, RefreshCw } from "lucide-react";
 import moment from "moment";
-import { sortVideoRecords } from "../lib/videoRecordOrder.js";
+import { sortVideoRecords, videoRecordDuration } from "../lib/videoRecordOrder.js";
 
 const RECORD_PICKER_FIELDS = [
   "date",
   "start_time",
   "duration_minutes",
+  "capture_active_duration_seconds",
+  "capture_wall_duration_seconds",
   "no_climax",
   "title",
   "exploration_type",
@@ -212,7 +214,7 @@ export default function VideoPlayer() {
                     {recordType === "body_exploration" && (record.title || record.exploration_type) ? `${record.title || record.exploration_type} · ` : ""}
                     {moment(record.date).format("MMM D, YYYY")}
                     {record.start_time ? ` · ${record.start_time}` : ""}
-                    {record.duration_minutes ? ` · ${record.duration_minutes}m` : ""}
+                    {videoRecordDuration(record) ? ` · ${videoRecordDuration(record)}` : ""}
                     {recordType === "session" && record.no_climax ? " · NC" : ""}
                     {(record.event_timeline || []).length > 0 ? ` · ${record.event_timeline.length} events` : ""}
                   </SelectItem>
