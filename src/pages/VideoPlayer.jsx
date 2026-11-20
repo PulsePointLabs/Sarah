@@ -6,6 +6,7 @@ import VideoSyncPlayer from "../components/VideoSyncPlayer";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Activity, AlertCircle, ArrowLeft, RefreshCw } from "lucide-react";
 import moment from "moment";
+import { sortVideoRecords } from "../lib/videoRecordOrder.js";
 
 const RECORD_PICKER_FIELDS = [
   "date",
@@ -14,17 +15,6 @@ const RECORD_PICKER_FIELDS = [
   "no_climax",
   "title",
   "exploration_type",
-];
-
-const VIDEO_SYNC_RECORD_FIELDS = [
-  ...RECORD_PICKER_FIELDS,
-  "event_timeline",
-  "subjective_near_climax_episodes",
-  "linked_local_videos",
-  "motion_analysis_summary",
-  "pre_climax_offset_s",
-  "climax_offset_s",
-  "recovery_offset_s",
 ];
 
 const VIDEO_SYNC_TIMELINE_FIELDS = [
@@ -64,49 +54,46 @@ export default function VideoPlayer() {
   const [recordListError, setRecordListError] = useState("");
   const [recordLoadError, setRecordLoadError] = useState("");
   const recordTypeRef = useRef(recordType);
+  const recordRequest = useRef(0);
 
   useEffect(() => {
     recordTypeRef.current = recordType;
   }, [recordType]);
 
   const handleSelectRecord = useCallback(async (id, typeOverride) => {
+    const request = ++recordRequest.current;
     const selectedType = typeOverride || recordTypeRef.current;
     setSelectedId(id);
     setSelectedRecord(null);
     setTimelineRows([]);
     setRecordLoadError("");
-    if (!id) return;
+    if (!id) {setLoadingSession(false);return;}
     setLoadingSession(true);
     const entity = selectedType === "body_exploration" ? base44.entities.BodyExploration : base44.entities.Session;
-    const analysisField = selectedType === "body_exploration" ? "ai_body_exploration" : "ai_analysis";
+    let recordLoaded=false, timelineFailed=false;
+    const timelineWarning="Saved videos, events and marked episodes are loaded. The heart-rate timeline could not load; use Refresh selected to retry.";
     try {
-      const [recordList, rows] = await Promise.all([
-        entity.filterFields(
-          { id },
-          [...VIDEO_SYNC_RECORD_FIELDS, analysisField],
-          undefined,
-          1,
-          undefined,
-          { timeoutMs: 20000 },
-        ),
-        base44.entities.HeartRateTimeline.filterFields(
+      base44.entities.HeartRateTimeline.filterFields(
           { session: id },
           VIDEO_SYNC_TIMELINE_FIELDS,
           "time_offset_s",
           undefined,
           undefined,
           { timeoutMs: 30000 },
-        ),
-      ]);
-      const record = recordList[0] || null;
+        ).then(rows=>{if(request===recordRequest.current)setTimelineRows(Array.isArray(rows)?rows:[]);})
+        .catch(()=>{timelineFailed=true;if(request===recordRequest.current&&recordLoaded)setRecordLoadError(timelineWarning);});
+      const record = await entity.get(id, { timeoutMs: 30000, cache: "no-store" });
+      if (request !== recordRequest.current) return;
+      if (!record || record.id !== id) throw new Error("Sarah did not return the selected record. Retry loading it; no saved data has been changed.");
+      recordLoaded=true;
       setSelectedRecord(record);
-      setTimelineRows(rows);
-      if (!record) setRecordLoadError("That record is no longer available.");
+      if(timelineFailed)setRecordLoadError(timelineWarning);
     } catch (error) {
+      if (request !== recordRequest.current) return;
       console.error("Could not load the selected Video Sync record:", error);
       setRecordLoadError(error?.message || "Could not load the selected record.");
     } finally {
-      setLoadingSession(false);
+      if (request === recordRequest.current) setLoadingSession(false);
     }
   }, []);
 
@@ -120,8 +107,8 @@ export default function VideoPlayer() {
       ]);
       const sessionRows = sessionResult.status === "fulfilled" ? sessionResult.value : [];
       const explorationRows = explorationResult.status === "fulfilled" ? explorationResult.value : [];
-      setSessions(sessionRows);
-      setExplorations(explorationRows);
+      setSessions(sortVideoRecords(sessionRows));
+      setExplorations(sortVideoRecords(explorationRows));
 
       const failures = [sessionResult, explorationResult].filter((result) => result.status === "rejected");
       if (failures.length) {
@@ -151,6 +138,8 @@ export default function VideoPlayer() {
   }, [handleSelectRecord, loadRecordOptions, searchParams]);
 
   const handleRecordTypeChange = (type) => {
+    recordRequest.current += 1;
+    setLoadingSession(false);
     setRecordType(type);
     setSelectedId("");
     setSelectedRecord(null);

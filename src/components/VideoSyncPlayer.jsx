@@ -14,7 +14,6 @@ import { useHowlTimeline } from '../hooks/useHowlTimeline.js';
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { videoShortcutCode } from "../lib/videoKeyboard.js";
-import { PhoneTelemetry } from "../lib/phoneTelemetry.js";
 import { sidebarLimits, sidebarWidth, isFocusShortcut } from "../lib/fullTelemetryLayout.js";
 import { useSubjectiveEpisodes } from "../hooks/useSubjectiveEpisodes.js";
 import { DEFAULT_VIDEO_VIEW, changeVideoView } from '../lib/videoViewport.js';
@@ -905,7 +904,6 @@ export default function VideoSyncPlayer({
   const suppressNextFullscreenVideoToggleRef = useRef(false);
   const nativeShell = isSarahNativeShell();
   const useSarahManagedFullscreen = nativeShell;
-  const nativeDesktopReview = nativeShell && (window.matchMedia('(pointer:fine)').matches || window.innerWidth >= 800);
   const pulseHaptic = useCallback((pattern = 18) => {
     if (typeof navigator === "undefined" || typeof navigator.vibrate !== "function") return;
     navigator.vibrate(pattern);
@@ -1989,8 +1987,6 @@ export default function VideoSyncPlayer({
     };
     const handleWaiting = () => syncSecondaryVideos(v.currentTime, false);
     const handlePlaying = () => syncSecondaryVideos(v.currentTime, true);
-    const handleSeeked = () => syncSecondaryVideos(v.currentTime, !v.paused, true);
-    v.addEventListener("seeked", handleSeeked);
     v.addEventListener("waiting", handleWaiting);
     v.addEventListener("playing", handlePlaying);
     v.addEventListener("timeupdate", handleTimeUpdate);
@@ -1998,7 +1994,6 @@ export default function VideoSyncPlayer({
     v.addEventListener("pause", handlePause);
     v.addEventListener("loadedmetadata", handleLoadedMetadata);
     return () => {
-      v.removeEventListener("seeked", handleSeeked);
       v.removeEventListener("waiting", handleWaiting);
       v.removeEventListener("playing", handlePlaying);
       v.removeEventListener("timeupdate", handleTimeUpdate);
@@ -2164,12 +2159,6 @@ export default function VideoSyncPlayer({
     const video = videoRef.current;
     if (!surface && !video) return;
     try {
-      if (useSarahManagedFullscreen && (window.matchMedia('(pointer:fine)').matches || window.innerWidth >= 800)) {
-        setTelemetryDisplayMode('overlay');
-        setShellFullscreenActive(current => !current);
-        setFullscreenControlsVisible(true);
-        return;
-      }
       if (useSarahManagedFullscreen) {
         if (video) {
           pendingMasterTimeRef.current = video.currentTime;
@@ -2223,15 +2212,6 @@ export default function VideoSyncPlayer({
     window.addEventListener("scroll", onScroll);
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
-
-  useEffect(() => {
-    if(!nativeShell)return undefined;
-    const enabled=shellFullscreenActive || (fullTelemetryView && telemetryFocus);
-    PhoneTelemetry.fullscreen({enabled}).catch(error=>console.warn('Video review fullscreen:',error));
-    const exit=()=>{setShellFullscreenActive(false);setTelemetryFocus(false);};
-    window.addEventListener('sarah-native-fullscreen-exit',exit);
-    return()=>{window.removeEventListener('sarah-native-fullscreen-exit',exit);if(enabled)PhoneTelemetry.fullscreen({enabled:false}).catch(()=>{});};
-  },[nativeShell,shellFullscreenActive,fullTelemetryView,telemetryFocus]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -3340,8 +3320,8 @@ export default function VideoSyncPlayer({
                       muted={!isMaster}
                       className="h-full w-full object-contain cursor-pointer"
                       style={isMaster ? videoViewStyle : undefined}
-                      controls={nativeShell && !nativeDesktopReview && isMaster}
-                      playsInline={!nativeShell || nativeDesktopReview}
+                      controls={nativeShell && isMaster}
+                      playsInline={!nativeShell}
                       onLoadedMetadata={() => {
                         if (!isMaster) handleSecondaryReady(feed.key);
                       }}
