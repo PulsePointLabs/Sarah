@@ -16,7 +16,6 @@ export default function StackedVideoViews({ master, secondary, masterRef, second
       const view=views[feed.key] || DEFAULT_VIDEO_VIEW;
       return <Fragment key={feed.key}><div data-camera={feed.key} tabIndex={0} role="group" aria-label={`${feed.label} video panel`}
         onFocus={event=>{if(event.target===event.currentTarget)onSelect(feed.key);}}
-        title="Click to focus: arrows pan when zoomed. Escape releases focus. Ctrl+Left/Right seeks 5 seconds."
         className={`relative min-h-0 min-w-0 overflow-hidden bg-black outline-none ${cleanVideo ? "" : "rounded-lg focus:ring-2 focus:ring-inset focus:ring-primary"}`}>
         <video ref={index===0?masterRef:el=>{secondaryRefs.current[feed.key]=el;}} src={feed.src}
           muted={index!==0} playsInline preload="auto" className="h-full w-full object-contain"

@@ -1,0 +1,30 @@
+const assert=require('node:assert/strict'),path=require('node:path'),os=require('node:os');
+const {chromium}=require(path.join(os.homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright'));
+(async()=>{const browser=await chromium.launch({channel:'chrome',headless:true});try{
+ const p=await browser.newPage({viewport:{width:1600,height:1000}}),errors=[];p.on('pageerror',e=>errors.push(e.message));
+ await p.route('**/api/**',route=>route.request().url().includes('/src/')?route.continue():route.fulfill({json:[]}));
+ await p.goto('http://127.0.0.1:5175/scripts/tests/fixtures/video-sidebar-resize.html');
+ await p.locator('input[type=file][accept*="video"]').first().setInputFiles('logs/two-angle-test.mp4');
+ await p.getByRole('button',{name:'Full Telemetry',exact:true}).click();
+ const video=p.locator('[data-camera=composite] video');await video.waitFor();await video.click();
+ const keyOnly=key=>p.evaluate(key=>window.dispatchEvent(new KeyboardEvent('keydown',{key,code:'',bubbles:true,cancelable:true})),key);
+ for(let n=1;n<=9;n++){await p.keyboard.press('Digit'+n);assert.equal(await video.evaluate(v=>v.playbackRate),n);}
+ await keyOnly('4');assert.equal(await video.evaluate(v=>v.playbackRate),4);
+ await p.keyboard.press(']');assert.equal(await video.evaluate(v=>v.playbackRate),4.1);
+ await p.keyboard.press('[');assert.equal(await video.evaluate(v=>v.playbackRate),4);
+ await p.keyboard.press('Numpad2');assert.equal(await video.evaluate(v=>v.playbackRate),2);
+ await p.keyboard.press('Control+Digit5');assert.equal(await video.evaluate(v=>v.playbackRate),2);
+ await keyOnly('f');assert.equal(await p.locator('.video-full-header').isVisible(),false);await keyOnly('f');assert.equal(await p.locator('.video-full-header').isVisible(),true);
+ await keyOnly('h');await video.hover();await p.waitForTimeout(1000);
+ assert.equal(await p.getByLabel('Video playback controls',{exact:true}).evaluate(e=>getComputedStyle(e).opacity),'0');
+ assert.equal(await p.locator('[data-camera=composite]').getAttribute('title'),null);
+ await p.getByRole('button',{name:'Show controls (H)',exact:true}).click();
+ await video.click();await keyOnly('s');const note=p.getByPlaceholder('Describe the event… or tap mic to dictate');await note.waitFor();
+ await note.fill('HF123');await p.keyboard.press('Digit8');await p.keyboard.press('h');assert.equal(await video.evaluate(v=>v.playbackRate),2);assert.ok((await note.inputValue()).includes('8h'));
+ await p.getByRole('button',{name:'Cancel',exact:true}).click();
+ await p.goto('http://127.0.0.1:5175/capture?display=media');await p.locator('input[type=file][accept="video/*,.wmv"]').setInputFiles('logs/two-angle-test.mp4');
+ const live=p.locator('video[src^="blob:"]').first();await live.waitFor();assert.equal(await live.evaluate(v=>v.controls),false);await live.hover();assert.equal(await live.evaluate(v=>v.controls),false);
+ await p.getByRole('button',{name:'Player controls',exact:true}).click();assert.equal(await live.evaluate(v=>v.controls),true);
+ await p.getByRole('button',{name:'Hide player controls',exact:true}).click();assert.equal(await live.evaluate(v=>v.controls),false);
+ assert.deepEqual(errors,[]);console.log('PASS top row/keypad/bracket speeds; Android key-only H/F/S; typing/modifier guards; no video hover tooltip or automatic controls; explicit control restore');
+}finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

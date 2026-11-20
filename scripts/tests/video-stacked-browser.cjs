@@ -44,7 +44,7 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   assert.equal(fast[0].rate,6);assert.ok(Math.abs(fast[0].t-fast[1].t)<.35);
   await page.locator('[data-camera=composite]').getByRole('button',{name:/Reset zoom/}).click();await top.click();await page.keyboard.press('Space');await page.keyboard.press('ArrowRight');await page.waitForTimeout(150);
   const paused=await page.locator('[data-camera] video').evaluateAll(es=>es.map(e=>({paused:e.paused,t:e.currentTime})));
-  assert.ok(paused.every(e=>e.paused));assert.ok(Math.abs(paused[0].t-paused[1].t)<.08);
+  assert.ok(paused.every(e=>e.paused));assert.ok(Math.abs(paused[0].t-paused[1].t)<.08,JSON.stringify(paused));
   await bottom.click();
   const beforePan=await top.evaluate(e=>e.currentTime);
   const beforeStyle=await bottom.getAttribute('style');

@@ -1744,6 +1744,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
   const [mediaVideo, setMediaVideo] = useState(null);
   const [mediaDragging, setMediaDragging] = useState(false);
   const [mediaFullscreen, setMediaFullscreen] = useState(false);
+  const [mediaPlayerControls,setMediaPlayerControls]=useState(false);
   const [mediaPlaying, setMediaPlaying] = useState(false);
   const [mediaProcessing, setMediaProcessing] = useState("");
   const [mediaError, setMediaError] = useState("");
@@ -7356,6 +7357,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
           </button>
           {mediaVideo && (
             <>
+              <button type="button" aria-pressed={mediaPlayerControls} onClick={()=>setMediaPlayerControls(value=>!value)} className="rounded-lg border border-border px-3 py-2 text-sm">{mediaPlayerControls?"Hide player controls":"Player controls"}</button>
               <button
                 type="button"
                 onClick={openMediaFullscreen}
@@ -7413,7 +7415,7 @@ export default function LiveCapture({ phoneOnly = false, onExitPhoneCapture } = 
               <video
                 ref={mediaVideoRef}
                 src={mediaVideo.url}
-                controls
+                controls={mediaPlayerControls}
                 controlsList="nofullscreen"
                 preload="metadata"
                 playsInline
