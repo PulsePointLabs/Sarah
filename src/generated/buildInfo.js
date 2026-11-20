@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.313",
-  "commit": "9b19d12",
-  "commitMessage": "Keep Chrome and APK session controls synchronized with polling recovery",
-  "builtAt": "2026-11-19T04:00:14.471Z"
+  "version": "0.1.314",
+  "commit": "2a1a330",
+  "commitMessage": "Fix DeX video keyboard shortcuts and remove hover controls",
+  "builtAt": "2026-11-20T01:55:53.070Z"
 };
