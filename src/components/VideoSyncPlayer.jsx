@@ -4466,7 +4466,7 @@ export default function VideoSyncPlayer({
           </div>
         )}
       </div>
-      {visualMarkupTarget?.event&&renderVisualMarkup()}
+      {visualMarkupTarget?.event&&createPortal(renderVisualMarkup(),telemetryWindow.target?.document.fullscreenElement||telemetryWindow.target?.document.body||document.fullscreenElement||document.body)}
     </div>
   );
 }
