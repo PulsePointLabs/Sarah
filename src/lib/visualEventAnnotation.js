@@ -109,7 +109,7 @@ export function visualMetricLines(annotation) {
   });
 }
 
-export async function captureVisualFrame(video,camera,sessionTimeS) {
+export async function captureVisualFrame(video,camera,sessionTimeS,allowSamplingDecoder=true) {
   if(!video||video.readyState<2||!video.videoWidth)throw Error('Load this camera video before marking a frame.');
   const target=sessionTimeS-(Number(camera.timelineOffsetSeconds)||0);
   if(target<0||Number.isFinite(video.duration)&&target>video.duration)throw Error('This event time is outside the selected camera video.');
@@ -119,11 +119,28 @@ export async function captureVisualFrame(video,camera,sessionTimeS) {
     const onSeek=()=>finish();const timer=setTimeout(()=>finish(Error('The camera did not finish seeking. Try again.')),8000);
     video.addEventListener('seeked',onSeek,{once:true});video.currentTime=target;
   });
+  if(Math.abs(video.currentTime-target)>.15)throw Error('This video could not seek to the event frame. Load a local copy or a seekable camera stream before marking it.');
   const ratio=Math.min(1,1280/video.videoWidth,1280/video.videoHeight),canvas=document.createElement('canvas');
   canvas.width=Math.round(video.videoWidth*ratio);canvas.height=Math.round(video.videoHeight*ratio);
   const context=canvas.getContext('2d');context.drawImage(video,0,0,canvas.width,canvas.height);
   // All subsequent measurements sample this saved frame, so reopening is reproducible.
-  return {width:canvas.width,height:canvas.height,source_width:video.videoWidth,source_height:video.videoHeight,video_time_s:video.currentTime,session_time_s:video.currentTime+(Number(camera.timelineOffsetSeconds)||0),data_url:canvas.toDataURL('image/jpeg',.84)};
+  try{
+    return {width:canvas.width,height:canvas.height,source_width:video.videoWidth,source_height:video.videoHeight,video_time_s:video.currentTime,session_time_s:video.currentTime+(Number(camera.timelineOffsetSeconds)||0),data_url:canvas.toDataURL('image/jpeg',.84)};
+  }catch(error){
+    if(error.name!=='SecurityError'||!allowSamplingDecoder)throw error;
+    // The APK's origin differs from its desktop media API. Keep the playback
+    // element untouched and request a CORS-enabled decoder only for pixel reads.
+    const sampler=document.createElement('video');sampler.crossOrigin='anonymous';sampler.muted=true;sampler.preload='auto';sampler.playsInline=true;
+    try{
+      await new Promise((resolve,reject)=>{
+        const finish=error=>{clearTimeout(timer);sampler.onloadeddata=null;sampler.onerror=null;error?reject(error):resolve();};
+        const timer=setTimeout(()=>finish(Error('Frame sampling timed out. Load a local copy of this camera video and try again.')),12000);
+        sampler.onloadeddata=()=>finish();sampler.onerror=()=>finish(Error('This video source does not allow image sampling. Load its local video file to annotate or measure it.'));
+        sampler.src=video.currentSrc||video.src;sampler.load();
+      });
+      return await captureVisualFrame(sampler,camera,sessionTimeS,false);
+    }finally{sampler.removeAttribute('src');sampler.load();}
+  }
 }
 
 export function drawVisualShapes(context,annotation,{labels=true}={}) {
