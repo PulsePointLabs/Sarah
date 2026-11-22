@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.315",
-  "commit": "87f4dd6",
-  "commitMessage": "Restore duration labels for capture-only session records",
-  "builtAt": "2026-11-20T04:11:36.763Z"
+  "version": "0.1.316",
+  "commit": "6e126f7",
+  "commitMessage": "Keep metric headings readable and phase legends inside cards",
+  "builtAt": "2026-11-22T03:41:59.200Z"
 };
