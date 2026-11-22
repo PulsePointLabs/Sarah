@@ -17,7 +17,7 @@ const RECORD_PICKER_FIELDS = [
   "title",
   "exploration_type",
   "avg_hr", "max_hr", "tags", "is_favorite", "notes",
-  "event_timeline", "subjective_near_climax_episodes", "linked_local_videos",
+  "review_event_count", "review_episode_count", "linked_local_videos",
   "video_file", "video_url", "capture_video_filename", "media_videos", "video_link",
 ];
 

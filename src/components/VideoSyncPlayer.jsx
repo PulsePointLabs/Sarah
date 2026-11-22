@@ -1,4 +1,6 @@
 import VideoEventContextCard from "./VideoEventContextCard.jsx";
+import VisualEventMarkup,{VisualEventSummary,VisualVideoOverlay} from './VisualEventMarkup.jsx';
+import {captureVisualFrame} from '../lib/visualEventAnnotation.js';
 import AnatomyEvidenceReview from "./AnatomyEvidenceReview.jsx";
 import TelemetryPickerMenu from './TelemetryPickerMenu.jsx';
 import StackedVideoViews from './StackedVideoViews.jsx';
@@ -1044,6 +1046,8 @@ export default function VideoSyncPlayer({
   // Add-new state
   const [addingNew, setAddingNew] = useState(false);
   const [newNote, setNewNote] = useState("");
+  const [newVisualAnnotation,setNewVisualAnnotation]=useState(null);
+  const [visualMarkupTarget,setVisualMarkupTarget]=useState(null);
   const [lastUsedCat, setLastUsedCat] = useState(defaultCategory);
   const [newCats, setNewCats] = useState([lastUsedCat]);
   const [newMin, setNewMin] = useState("");
@@ -1160,7 +1164,8 @@ export default function VideoSyncPlayer({
         recordId: session.id,
         recordType,
         forceReview,
-        event: { ...event, event_id: event.event_id || event.id || null },
+        // The job loads saved markings by event ID; do not duplicate private frame images in its payload.
+        event: { ...event, visual_annotation: undefined, event_id: event.event_id || event.id || null },
         video: {
           path: feed.localPath,
           label: feed.label || feed.fileName || feed.key,
@@ -1650,6 +1655,7 @@ export default function VideoSyncPlayer({
         category: categories,
         source: "manual",
         annotation_camera: annotationCameraFromFeed(annotationFeed),
+        ...(newVisualAnnotation?{visual_annotation:newVisualAnnotation}:{}),
         annotation_tags: classification.annotation_tags,
         ai_annotation: {
           source: classification.rationale === "Local keyword fallback" ? "local-fallback" : "ai",
@@ -1659,6 +1665,7 @@ export default function VideoSyncPlayer({
       await saveEvents([...events, ev]);
       queueManualAnnotationVisualReview(ev, { feedOverride: annotationFeed, forceReview: ev.annotation_camera.role === "feet" });
       setLastUsedCat(categories[0] || "other");
+      setNewVisualAnnotation(null);
       setNewNote(""); setNewMin(""); setNewSec(""); setNewCats([categories[0] || "other"]);
       setNewCatsTouched(false);
       setAutoTagSuggestion(null);
@@ -1681,6 +1688,7 @@ export default function VideoSyncPlayer({
   };
 
   const startAddAtPlayhead = () => {
+    setNewVisualAnnotation(null);
     annotationDraftFeedRef.current = { ...selectedAnnotationFeedRef.current };
     if (videoRef.current && !videoRef.current.paused) videoRef.current.pause();
     pulseHaptic(15);
@@ -1697,6 +1705,36 @@ export default function VideoSyncPlayer({
   };
 
   openEventEditorRef.current=(dictate=false)=>{startAddAtPlayhead();if(dictate)void toggleListening();};
+
+  const openVisualMarkup=async(event=null,index=null)=>{
+    try{
+      const initial=event?.visual_annotation||(!event?newVisualAnnotation:null);
+      if(initial){setVisualMarkupTarget({initial,event,index});return;}
+      const owner=event?.annotation_camera;
+      const feed=owner?.key?{...videoFeeds[owner.key],key:owner.key,timelineOffsetSeconds:owner.timelineOffsetSeconds}:(event?selectedAnnotationFeedRef.current:annotationDraftFeedRef.current||selectedAnnotationFeedRef.current);
+      if(!feed?.key)throw Error('Select and load the camera to annotate.');
+      const video=feed.key===activeFeedKey?videoRef.current:videoFeedRefs.current[feed.key];
+      const camera={...annotationCameraFromFeed(feed),source_name:feed.fileName||feed.label||feed.key};
+      const time=event?Number(event.time_s):(parseInt(newMin,10)||0)*60+Math.min(59,parseInt(newSec,10)||0);
+      const frame=await captureVisualFrame(video,camera,time);
+      setVisualMarkupTarget({initial:{version:1,frame,camera,shapes:[],calibration:null},event,index});
+    }catch(error){showQuickNotice(error.message||'Could not capture this event frame.','error');if(!event)setAutoTagError(error.message);}
+  };
+  const applyVisualMarkup=async(annotation)=>{
+    const target=visualMarkupTarget;
+    if(!target.event)setNewVisualAnnotation(annotation);
+    else{
+      const index=eventsRef.current.findIndex((event,i)=>target.event.event_id?event.event_id===target.event.event_id:i===target.index&&event.time_s===target.event.time_s&&event.note===target.event.note);
+      if(index<0)throw Error('This event changed or was removed. Close and reopen its markings.');
+      const event={...eventsRef.current[index],event_id:eventsRef.current[index].event_id||`manual-${crypto.randomUUID()}`,visual_annotation:annotation,annotation_camera:annotation.camera};
+      const previous=eventsRef.current;
+      try{await saveEvents(previous.map((item,i)=>i===index?event:item));}
+      catch(error){eventsRef.current=previous;setEvents(previous);throw error;}
+      setActiveEventIdx(index);
+    }
+    setVisualMarkupTarget(null);
+  };
+  const renderVisualMarkup=()=>visualMarkupTarget?<VisualEventMarkup key={visualMarkupTarget.event?.event_id||'new-event'} initial={visualMarkupTarget.initial} eventId={visualMarkupTarget.event?.event_id} events={events} onApply={applyVisualMarkup} onClose={()=>setVisualMarkupTarget(null)}/>:null;
 
   const chartData = useMemo(() => timelineRows
     .map((r) => ({
@@ -2354,8 +2392,9 @@ export default function VideoSyncPlayer({
   // Click event note → seek to it
   const seekToEvent = (ev, idx) => {
     setActiveEventIdx(idx);
-    setPlayheadS(ev.time_s);
-    const videoT = Math.max(0, ev.time_s - videoOffset);
+    const time=ev.visual_annotation?.frame?.session_time_s??ev.time_s;
+    setPlayheadS(time);
+    const videoT = Math.max(0, time - videoOffset);
     setSynchronizedVideoTime(videoT);
   };
 
@@ -2760,7 +2799,7 @@ export default function VideoSyncPlayer({
                 onEpisodeEdit={editSubjective} onEpisodeEditStart={() => videoRef.current?.pause()}
               />
             </div>
-            {telemetryWindow.target && <div className="monitor-events">{[{label:'Current event',entry:fullTelemetryEvents.current},{label:'Upcoming event',entry:fullTelemetryEvents.upcoming}].map(({label,entry})=><VideoEventContextCard key={label} label={label} entry={entry} rows={timelineRows} onSeek={({ev,i})=>seekToEvent(ev,i)}/>)}</div>}
+            {telemetryWindow.target && <div className="monitor-events">{[{label:'Current event',entry:fullTelemetryEvents.current},{label:'Upcoming event',entry:fullTelemetryEvents.upcoming}].map(({label,entry})=><VideoEventContextCard key={label} label={label} entry={entry} rows={timelineRows} onSeek={({ev,i})=>seekToEvent(ev,i)} onVisualOpen={openVisualMarkup}/>)}</div>}
           </aside>
   );
 
@@ -2797,12 +2836,12 @@ export default function VideoSyncPlayer({
             </header>
 
             <div className={`${videoOnly || telemetryFocus || telemetryWindow.target ? 'hidden' : 'grid'} video-event-context-row shrink-0 grid-cols-2 gap-2`}>
-              {[{label:'Current Event',entry:fullTelemetryEvents.current},{label:'Upcoming Event',entry:fullTelemetryEvents.upcoming}].map(({label,entry})=><VideoEventContextCard key={label} label={label} entry={entry} rows={timelineRows} onSeek={({ev,i})=>seekToEvent(ev,i)}/>)}
+              {[{label:'Current Event',entry:fullTelemetryEvents.current},{label:'Upcoming Event',entry:fullTelemetryEvents.upcoming}].map(({label,entry})=><VideoEventContextCard key={label} label={label} entry={entry} rows={timelineRows} onSeek={({ev,i})=>seekToEvent(ev,i)} onVisualOpen={openVisualMarkup}/>)}
             </div>
 
             <div className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black ${videoOnly ? "" : "rounded-xl border border-white/10"}`}>
               {videoOnly&&<button type="button" onClick={()=>setPlaybackControlsRevealed(value=>!value)} aria-pressed={playbackControlsRevealed} className="absolute bottom-2 right-2 z-50 rounded border border-white/30 bg-black/70 px-3 py-1 text-sm text-white">Playback controls</button>}
-              <StackedVideoViews onPlaybackClick={()=>{if(videoOnly||telemetryFocus)setPlaybackControlsRevealed(value=>!value);}} cleanVideo={videoOnly} layout={cameraLayout} master={{key:activeFeedKey,label:videoFeeds[activeFeedKey]?.label || 'Master camera',src:videoFeeds[activeFeedKey]?.src || videoSrc}}
+              <StackedVideoViews annotation={events[activeEventIdx]?.visual_annotation} frameTimeS={playheadS} onPlaybackClick={()=>{if(videoOnly||telemetryFocus)setPlaybackControlsRevealed(value=>!value);}} cleanVideo={videoOnly} layout={cameraLayout} master={{...videoFeeds[activeFeedKey],key:activeFeedKey,label:videoFeeds[activeFeedKey]?.label || 'Master camera',src:videoFeeds[activeFeedKey]?.src || videoSrc}}
                 secondary={secondAngleKey!==activeFeedKey?loadedFeeds.find(f=>f.key===secondAngleKey):null}
                 masterRef={videoRef} secondaryRefs={videoFeedRefs} views={feedViews} selected={selectedViewKey}
                 onSelect={selectView} onReady={handleSecondaryReady}
@@ -2944,6 +2983,9 @@ export default function VideoSyncPlayer({
               <input type="number" min={0} max={59} value={newSec} onChange={(e) => setNewSec(e.target.value)}
                 placeholder="sec" className="w-16 text-xs font-mono text-center bg-background border border-border rounded px-2 py-1.5" />
             </div>
+            <button type="button" className="visual-event-open" onClick={()=>openVisualMarkup()}>Highlight / measure this frame</button>
+            {newVisualAnnotation&&<VisualEventSummary annotation={newVisualAnnotation} onOpen={()=>openVisualMarkup()}/>}
+            {visualMarkupTarget&&!visualMarkupTarget.event&&renderVisualMarkup()}
             <CategorySelector
               selected={newCats}
               categories={categoryOptions}
@@ -3368,6 +3410,7 @@ export default function VideoSyncPlayer({
                         else selectMasterFeed(feed.key);
                       }}
                     />
+                    <VisualVideoOverlay annotation={events[activeEventIdx]?.visual_annotation} frameTimeS={playheadS} feedKey={feed.key} camera={{key:feed.key,path:feed.localPath,fingerprint:feed.fingerprint,source_name:feed.fileName||feed.label||feed.key}} view={isMaster?videoView:undefined}/>
                     {isMaster && videoView.zoom > 1 && <button type="button" onClick={()=>updateVideoView('reset')} className="absolute right-2 top-2 rounded bg-black/75 px-2 py-1 text-xs text-white">{Math.round(videoView.zoom*100)}% · Arrows pan · Reset zoom</button>}
                     <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-1 rounded bg-black/65 px-2 py-1 text-[10px] font-medium text-white">
                       {feed.label}
@@ -4312,6 +4355,7 @@ export default function VideoSyncPlayer({
                       </div>
                     )}
                     <button type="button" onClick={() => seekToEvent(ev, i)} className="text-left text-xs text-foreground leading-snug">{ev.note}</button>
+                    <VisualEventSummary annotation={ev.visual_annotation} onOpen={()=>openVisualMarkup(ev,i)}/>
                     <ManualNoteSarahRead
                       review={manualReviewForEvent(ev)}
                       pending={[...pendingManualReviewIds].some(key => key.endsWith(`:${manualReviewEventKey(ev)}`))}
@@ -4415,6 +4459,7 @@ export default function VideoSyncPlayer({
           </div>
         )}
       </div>
+      {visualMarkupTarget?.event&&renderVisualMarkup()}
     </div>
   );
 }

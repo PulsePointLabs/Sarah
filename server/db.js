@@ -162,7 +162,9 @@ function projectedEntityJsonSql(fields = []) {
   if (!safeFields.length) return null;
   const args = safeFields.flatMap((field) => [
     `'${field}'`,
-    `json_extract(data, '$.${field}')`,
+    field === 'review_event_count' ? "COALESCE(json_array_length(json_extract(data, '$.event_timeline')), 0)"
+      : field === 'review_episode_count' ? "COALESCE(json_array_length(json_extract(data, '$.subjective_near_climax_episodes')), 0)"
+      : `json_extract(data, '$.${field}')`,
   ]);
   return `json_object(${args.join(', ')})`;
 }

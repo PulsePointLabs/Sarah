@@ -1,4 +1,5 @@
 import { REVIEW_READER_RULE, anatomyChecklistLabels } from '../../src/lib/anatomyReview.js';
+import {visualAnnotationAIContext,sameVisualCamera} from '../../src/lib/visualEventAnnotation.js';
 import express from 'express';
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
@@ -672,6 +673,7 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
     event_id: event.event_id || event.id || null,
     note_time_s: noteTimeS,
     manual_note: String(event.note || '').trim(),
+    ...(event.visual_annotation?{visual_annotation_updated_at:event.visual_annotation.updated_at,visual_mark_measurements:event.visual_annotation.shapes?.map(({id,type,label,metrics})=>({id,type,label,metrics})),visual_mark_comparisons:event.visual_annotation.comparisons}:{}),
     source: 'manual_annotation_guided_visual_review',
     source_job_id: context.jobId,
     source_video: {
@@ -757,20 +759,25 @@ registerJobHandler('manual_annotation_visual_review', async (payload, context) =
   },required:['anatomical_area','observation','visibility','confidence','evidence_time_s']},minItems:anatomyAreas.length,maxItems:anatomyAreas.length};
   reviewSchema.required=[...reviewSchema.required,'anatomy_checklist'];
   const anatomyRule=`Check every area exactly once: ${anatomyAreas.join('; ')}. In anatomy_checklist give one concise visible state/change for each, or not_visible if obscured/out of frame. Do not infer a normal finding for missing coverage. Keep the same checklist on every note; meaningful changes also belong in findings. evidence_time_s is SESSION time within this window.`;
+  const userMarks=visualAnnotationAIContext(event.visual_annotation);
+  const referenceEvent=(record.event_timeline||[]).find(item=>item.event_id===event.visual_annotation?.reference?.event_id);
+  const referenceMarks=referenceEvent&&referenceEvent.visual_annotation?.updated_at===event.visual_annotation?.reference?.updated_at&&sameVisualCamera(event.visual_annotation?.camera,referenceEvent.visual_annotation?.camera)?visualAnnotationAIContext(referenceEvent.visual_annotation):{prompt:'',images:[]};
+  const markImages=[...userMarks.images,...referenceMarks.images.map(image=>({...image,filename:'reference-marked-event-frame.jpg'}))];
+  const markPrompt=userMarks.prompt+(referenceMarks.prompt?`\nREFERENCE EVENT FRAME / MARKINGS (the last attached image; a separate earlier or later timestamp):\n${referenceMarks.prompt}`:'');
   let aiResult = await aiInvokeInternal({
     model: 'claude_sonnet_4_6',
     max_tokens: isFeetCamera ? 6000 : 4000,
-    max_images: extracted.frames.length + crops.length,
+    max_images: extracted.frames.length + crops.length + markImages.length,
     response_json_schema: reviewSchema,
-    images: [...extracted.frames, ...crops].map((frame) => ({ filename: frame.filename, media_type: frame.mimeType, data: frame.data })),
+    images: [...[...extracted.frames, ...crops].map((frame) => ({ filename: frame.filename, media_type: frame.mimeType, data: frame.data })),...markImages],
     signal: context.signal,
-    prompt: isFeetCamera ? `${REVIEW_READER_RULE}\n${anatomyRule}\n${TEMPORAL_FEET_RULES}
+    prompt: isFeetCamera ? `${REVIEW_READER_RULE}\n${anatomyRule}\n${markPrompt}\n${TEMPORAL_FEET_RULES}
 Annotation attention marker at ${formatSessionClock(noteTimeS)}: ${String(event.note || '').trim()}
 Full window available: ${formatSessionClock(start+timelineOffsetSeconds)} through ${formatSessionClock(end+timelineOffsetSeconds)}.
 Ordered evidence: ${frameTiming}
 Dense temporal measurements (pixels, SESSION seconds; track labels are localization hypotheses):
 ${JSON.stringify({ ...motion, frame_metrics: motion.frame_metrics.map(m => ({ time_s: m.time_s, camera_compensated: m.camera_compensated, motion_p95_px: m.motion_p95_px, strongest_cells: [...m.tiles].sort((a,b) => b.p90_px-a.p90_px).slice(0,3) })) })}
-` : `${REVIEW_READER_RULE}\n${anatomyRule}\nYou are Sarah performing a quiet, automatic, manual-note-guided visual review of a private physiology session.
+` : `${REVIEW_READER_RULE}\n${anatomyRule}\n${markPrompt}\nYou are Sarah performing a quiet, automatic, manual-note-guided visual review of a private physiology session.
 
 The user's note is an attention marker. Independently describe the current window; do not grade, validate, rebut, or decline the annotation. Do not simply paraphrase the note. Do not invent anatomy, motion, color, sensation, internal physiology, or causation. Save only meaningful visible changes; omit static scene description unless it establishes a change baseline.
 

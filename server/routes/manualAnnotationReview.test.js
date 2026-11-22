@@ -1,4 +1,5 @@
 import { REVIEW_READER_RULE, anatomyChecklistLabels } from '../../src/lib/anatomyReview.js';
+import {visualAnnotationAIContext,sameVisualCamera} from '../../src/lib/visualEventAnnotation.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -23,7 +24,7 @@ function fixture(prior = [], { duration = 1200, offset = 0 } = {}) {
   const cleanup = [];
   let response = { summary: "", findings: [], narrative: { before: "Before, your left toes begin to curl.", around: "Around the mark, flexion increases.", after: "Afterward, toe flexion decreases while the ankle remains plantar-flexed." } };
   let aiError = null;
-  const context = { REVIEW_READER_RULE, anatomyChecklistLabels, structuredClone,
+  const context = { REVIEW_READER_RULE, anatomyChecklistLabels, structuredClone, visualAnnotationAIContext,sameVisualCamera,
     ...coverage, ...text, ...temporal, crypto, directObservationText, polishFeetReview,
     withManualEvidenceWorkspace: async task => { try { return await task("synthetic-workspace"); } finally { cleanup.push("workspace"); } },
     probeAnnotationVideo: async () => ({ width: 1920, height: 1080, fps: 30, duration_s: duration }),
@@ -142,4 +143,12 @@ test('Main retains original output structure and accepts full original-resolutio
   assert.equal(result.summary,'Your abdominal tension increases.');assert.equal(result.narrative,undefined);
   assert.equal(result.evidence_quality.full_frame_native,true);assert.equal(f.calls[0].response_json_schema.properties.note_assessment,undefined);
   assert.match(f.calls[0].prompt,/glans/);assert.match(f.calls[0].prompt,/grip/);
+});
+
+test('manual review receives labeled marked frames and measurements as attention context',async()=>{
+  const f=fixture();const camera={key:'composite',fingerprint:'fixture',label:'Main'};
+  const visual_annotation={version:1,camera,frame:{width:1280,height:720,source_width:1920,source_height:1080,session_time_s:72},shapes:[{id:'distance',type:'distance',label:'Scrotal lift',points:[{x:.4,y:.6},{x:.4,y:.7}],metrics:{distance_px:108}}],marked_frame_data_url:'data:image/jpeg;base64,YQ=='};
+  await f.run(72,{event:{event_id:'note',time_s:72,note:'Lift',annotation_camera:{role:'main'},visual_annotation},video:{path:'C:/camera.mp4',role:'main'}});
+  assert.match(f.calls[0].prompt,/Scrotal lift/);assert.match(f.calls[0].prompt,/108/);
+  assert.equal(f.calls[0].images.at(-1).filename,'user-marked-event-frame.jpg');assert.equal(f.calls[0].max_images,f.calls[0].images.length);
 });
