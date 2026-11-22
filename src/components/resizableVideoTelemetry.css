@@ -100,3 +100,4 @@
 .video-phase-details{font-size:16px;line-height:1.2}
 .video-phase-evidence-dialog{width:min(860px,94vw);max-height:88dvh;padding:16px;border:1px solid hsl(var(--border));border-radius:12px;background:hsl(var(--card));color:hsl(var(--foreground));font-size:17px;line-height:1.4}
 .video-phase-evidence-dialog::backdrop{background:#0009}.video-phase-evidence-dialog header{display:flex;justify-content:space-between;gap:16px;margin-bottom:10px}.video-phase-evidence-dialog button{border:1px solid hsl(var(--border));border-radius:5px;padding:4px 8px}.video-phase-evidence-dialog p{font-size:17px!important}
+.video-resizable-content .metric-full-label{font-size:16px!important}.video-phase-legend{flex-wrap:wrap;row-gap:2px}.video-phase-legend>span{white-space:nowrap}
