@@ -1,0 +1,16 @@
+.video-session-picker-trigger{display:flex;justify-content:space-between;align-items:center;gap:14px;width:100%;padding:12px 14px;text-align:left;border:1px solid hsl(var(--border));border-radius:12px;background:hsl(var(--card));font-size:16px}
+.video-session-picker-trigger>div,.video-session-picker-option>div{min-width:0;flex:1}
+.video-session-picker-trigger:hover{border-color:hsl(var(--primary)/.65)}
+.video-session-picker-trigger:focus-visible,.video-session-picker-option:focus-visible{outline:2px solid hsl(var(--primary));outline-offset:-2px}
+.video-session-picker-title{display:flex;gap:8px;align-items:center;overflow-wrap:anywhere;font-size:17px;line-height:1.3}
+.video-session-picker-date{font-size:16px;color:hsl(var(--muted-foreground));margin-top:3px}
+.video-session-picker-metrics{display:flex;flex-wrap:wrap;gap:5px 14px;margin-top:8px;font-size:15px;line-height:1.3;color:hsl(var(--muted-foreground))}
+.video-session-picker-metrics span{display:inline-flex;align-items:center;gap:5px}.video-session-picker-metrics svg{width:15px;height:15px;flex-shrink:0}
+.video-session-picker-preview{margin-top:7px;line-height:1.35;font-size:15px;overflow-wrap:anywhere}
+.video-session-picker-panel{width:min(780px,calc(100vw - 24px));max-height:min(680px,var(--radix-popover-content-available-height));padding:10px;display:flex;flex-direction:column;overflow:hidden;border-radius:12px}
+.video-session-picker-search{display:flex;align-items:center;gap:9px;border:1px solid hsl(var(--border));border-radius:8px;padding:8px 10px;flex-shrink:0}.video-session-picker-search svg{width:18px;flex-shrink:0}.video-session-picker-search input{min-width:0;width:100%;background:transparent;font-size:16px;outline:none}
+.video-session-picker-count{font-size:14px;color:hsl(var(--muted-foreground));padding:8px 3px;flex-shrink:0}
+.video-session-picker-list{overflow-y:auto;overscroll-behavior:contain;min-height:0;display:flex;flex-direction:column;gap:7px;padding:2px}
+.video-session-picker-option{position:relative;display:flex;align-items:start;gap:10px;width:100%;text-align:left;border:1px solid hsl(var(--border));border-radius:9px;background:hsl(var(--card));padding:10px 12px;flex-shrink:0}
+.video-session-picker-option:hover,.video-session-picker-option[aria-selected=true]{border-color:hsl(var(--primary)/.7);background:hsl(var(--primary)/.07)}
+.video-session-picker-check{width:20px;height:20px;color:hsl(var(--primary));flex-shrink:0}.video-session-picker-empty{padding:20px 8px;font-size:16px;color:hsl(var(--muted-foreground))}

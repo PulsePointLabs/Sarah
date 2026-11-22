@@ -47,7 +47,7 @@ import ClimaxMotionSnapshotCard from "./ClimaxMotionSnapshotCard";
 import MotionPlaybackReadout from "./MotionPlaybackReadout";
 import VideoSyncPhysiologySidebar from "./VideoSyncPhysiologySidebar";
 import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
-import { smoothReviewDictation } from "../lib/reviewDictation.js";
+import { smoothReviewDictation, mergeReviewDictation } from "../lib/reviewDictation.js";
 import { isSarahNativeShell } from "@/lib/mobileApiBase";
 import { readSttProviderPreference } from "@/lib/sttSettings";
 import { bloodPressureReadingsFromSession, pulseOxReadingsFromSession } from "@/lib/sessionContext";
@@ -1062,12 +1062,12 @@ export default function VideoSyncPlayer({
   // Speech-to-text uses the configured provider through the existing local API.
   const [isListening, setIsListening] = useState(false);
   const [interimText, setInterimText] = useState("");
+  const [dictationLevel,setDictationLevel]=useState(0);
   const [quickListening, setQuickListening] = useState(false);
   const [quickTranscribing, setQuickTranscribing] = useState(false);
   const [quickNotice, setQuickNotice] = useState(null);
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
-  const audioChunksRef = useRef([]);
   const quickDictationRef = useRef({ timeS: 0, resume: false });
   const quickNoticeTimerRef = useRef(null);
   const eventsRef = useRef(events);
@@ -1076,17 +1076,6 @@ export default function VideoSyncPlayer({
   const openEventEditorRef=useRef(null), dialogDictationEpoch=useRef(0);
   const [playbackControlsRevealed,setPlaybackControlsRevealed]=useState(false);
 
-  const STT_PROMPT = "Natural spoken event notes, with connected phrases and coordinated lists kept together. Example: Cleaning feet and footrests, then repositioning. Preserve the speaker’s wording. Vocabulary: " + (isExploration
-    ? "Body exploration note. Foley catheter insertion. Urethral sounding observation. " +
-      "Device movement at the meatus. Balloon awareness. Pressure and comfort noted. " +
-      "Instrumentation paused for repositioning. Gentle withdrawal. Tissue appearance observed. " +
-      "Heart rate change. Breathing relaxed. Irritation and tolerance review."
-    :
-    "Session log note. Gentle strokes on the glans penis. Foreskin partially retracted. " +
-    "Stimulation paused. Perineum pressure applied. Pelvic floor contraction. " +
-    "E-stim via TENS unit. Foley catheter in place. Urethral stimulation. " +
-    "Edging — arousal near climax. Frenulum contact. Prostate stimulation. " +
-    "Ejaculation, refractory period, buildup, plateau, involuntary spasm, discomfort.").replace(/\.\s+/g, ", ");
 
   useEffect(() => {
     latestNewNoteRef.current = newNote.trim();
@@ -1422,11 +1411,10 @@ export default function VideoSyncPlayer({
     const res = await base44.functions.invoke("whisperSTT", {
       audio_base64: btoa(bin),
       mime_type: mimeType,
-      prompt: STT_PROMPT,
       provider: readSttProviderPreference(),
     });
     return smoothReviewDictation(res.data?.text);
-  }, [STT_PROMPT]);
+  }, []);
 
   const stopListening = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
@@ -1444,37 +1432,74 @@ export default function VideoSyncPlayer({
       ? "audio/webm;codecs=opus"
       : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/ogg";
     const recorder = new MediaRecorder(stream, { mimeType });
-    audioChunksRef.current = [];
+    const chunks=[];
+    let stopped=false,lastPreviewAt=Date.now(),previewInFlight=null,lastTranscript='';
+    let audioContext=null,meterTimer=null,heardSpeech=false,meterAvailable=false;
+    try {
+      const AudioContextClass=window.AudioContext||window.webkitAudioContext;
+      if(AudioContextClass){
+        audioContext=new AudioContextClass();void audioContext.resume().catch(()=>{});
+        const analyser=audioContext.createAnalyser();analyser.fftSize=1024;
+        audioContext.createMediaStreamSource(stream).connect(analyser);
+        const samples=new Float32Array(analyser.fftSize);
+        meterTimer=setInterval(()=>{
+          if(audioContext.state!=='running')return;
+          meterAvailable=true;analyser.getFloatTimeDomainData(samples);
+          const rms=Math.sqrt(samples.reduce((sum,value)=>sum+value*value,0)/samples.length);
+          if(rms>.003)heardSpeech=true;
+          if(mode==='dialog'&&draftEpoch===dialogDictationEpoch.current)setDictationLevel(Math.min(1,rms*12));
+        },100);
+      }
+    } catch { /* Transcription still works when Web Audio metering is unavailable. */ }
+    const current=()=>mode!=='dialog'||draftEpoch===dialogDictationEpoch.current;
+    const applyText=text=>{
+      if(!text||!current())return;
+      const previousTranscript=lastTranscript;lastTranscript=text;
+      setNewNote(previous=>current()?mergeReviewDictation(previous,previousTranscript,text):previous);
+    };
+    const preview=()=>{
+      if(mode!=='dialog'||stopped||previewInFlight||!current()||(meterAvailable&&!heardSpeech))return;
+      const blob=new Blob(chunks,{type:mimeType});
+      if(!blob.size)return;
+      lastPreviewAt=Date.now();
+      previewInFlight=transcribeAudio(blob,mimeType).then(text=>{if(!stopped&&current())applyText(text);})
+        .catch(()=>{ /* A partial WebM may not decode yet; final audio gets a full retry. */ })
+        .finally(()=>{previewInFlight=null;});
+    };
     recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      if (event.data.size > 0) chunks.push(event.data);
+      if(Date.now()-lastPreviewAt>=3000)preview();
     };
     recorder.onstop = async () => {
+      stopped=true;clearInterval(meterTimer);void audioContext?.close().catch(()=>{});
+      if(mode==='dialog'&&current())setDictationLevel(0);
       stream.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-      mediaRecorderRef.current = null;
-      const blob = new Blob(audioChunksRef.current, { type: mimeType });
-      audioChunksRef.current = [];
+      if(mediaStreamRef.current===stream)mediaStreamRef.current = null;
+      if(mediaRecorderRef.current===recorder)mediaRecorderRef.current = null;
+      const blob = new Blob(chunks, { type: mimeType });
 
       if (mode === "quick") {
         setQuickListening(false);
         setQuickTranscribing(true);
         showQuickNotice("Transcribing voice event...", "working");
-      } else {
+      } else if(current()) {
         setIsListening(false);
         setInterimText("Transcribing...");
       }
 
       try {
         if(mode === "dialog" && draftEpoch!==dialogDictationEpoch.current)return;
+        await previewInFlight;
+        if(!current())return;
+        if(meterAvailable&&!heardSpeech)throw new Error('No microphone signal was detected. Check the Android/DeX microphone input and permission, then try again.');
         const text = await transcribeAudio(blob, mimeType);
         if(mode === "dialog" && draftEpoch!==dialogDictationEpoch.current)return;
         if (mode === "quick") {
           await saveQuickVoiceEvent(text);
         } else if (text) {
-          setNewNote((previous) => {
-            const base = previous.trim();
-            return base ? `${base} ${text}` : text;
-          });
+          applyText(text);
+        } else {
+          setAutoTagError('No clear speech was recognized. Your typed text is preserved; check the microphone input and try again.');
         }
       } catch (error) {
         if(mode==='dialog'&&draftEpoch!==dialogDictationEpoch.current)return;
@@ -1483,14 +1508,15 @@ export default function VideoSyncPlayer({
           showQuickNotice("Speech-to-text failed. Nothing was saved.", "error");
           await resumeAfterQuickDictation();
         } else {
-          setAutoTagError("Speech-to-text failed. Please try again.");
+          setAutoTagError(error?.message || "Speech-to-text failed. Your typed text is preserved; please try again.");
         }
       } finally {
         if (mode === "quick") setQuickTranscribing(false);
         else if(draftEpoch===dialogDictationEpoch.current)setInterimText("");
       }
     };
-    recorder.start();
+    if(!current()){clearInterval(meterTimer);void audioContext?.close().catch(()=>{});stream.getTracks().forEach(track=>track.stop());return;}
+    recorder.start(mode==='dialog'?1000:undefined);
     mediaRecorderRef.current = recorder;
     if (mode === "quick") setQuickListening(true);
     else setIsListening(true);
@@ -1535,6 +1561,7 @@ export default function VideoSyncPlayer({
   }, [isListening, playheadS, pulseHaptic, quickListening, quickTranscribing, resumeAfterQuickDictation, showQuickNotice, startSpeechRecording, stopListening]);
 
   useEffect(() => () => {
+    dialogDictationEpoch.current++;
     if (quickNoticeTimerRef.current) clearTimeout(quickNoticeTimerRef.current);
     if (mediaRecorderRef.current?.state !== "inactive") mediaRecorderRef.current?.stop();
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -2951,6 +2978,10 @@ export default function VideoSyncPlayer({
                 </button>
               )}
             </div>
+            {isListening&&<div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+              <meter min="0" max="1" value={dictationLevel} aria-label="Microphone input level" className="h-3 w-20"/>
+              Listening · text updates every few seconds
+            </div>}
             <div className="rounded-lg border border-border bg-muted/25 px-3 py-2">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">

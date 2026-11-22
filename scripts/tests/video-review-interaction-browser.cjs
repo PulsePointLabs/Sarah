@@ -1,22 +1,26 @@
 const assert=require('node:assert/strict'),path=require('node:path'),os=require('node:os');
 const {chromium}=require(path.join(os.homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright'));
 (async()=>{const browser=await chromium.launch({channel:'chrome',headless:true,args:['--use-fake-ui-for-media-stream','--use-fake-device-for-media-stream']});try{
- const p=await browser.newPage({viewport:{width:1920,height:1080}}),errors=[],saved=[];p.on('pageerror',e=>errors.push(e.message));
+ const p=await browser.newPage({viewport:{width:1920,height:1080}}),errors=[],saved=[],transcriptions=[];let slowTranscription=false;p.on('pageerror',e=>errors.push(e.message));
  await p.addInitScript(()=>{window.reviewFixtureEvents=[{event_id:'past',time_s:0,note:'Current observation',category:['other']},{event_id:'future',time_s:60,note:'Upcoming observation',category:['other']}];});
- await p.route('**/api/**',route=>{
+ await p.route('**/api/**',async route=>{
   const req=route.request(),u=req.url();if(u.includes('/src/'))return route.continue();
-  if(u.endsWith('/functions/whisperSTT'))return route.fulfill({json:{text:'Cleaning feet. And footrests.'}});
+  if(u.endsWith('/functions/whisperSTT')){const body=req.postDataJSON();assert.equal(body.prompt,undefined,'do not seed speech with instructional examples');transcriptions.push(body);if(slowTranscription)await new Promise(resolve=>setTimeout(resolve,1200));return route.fulfill({json:{text:'Cleaning feet. And footrests.'}});}
   if(req.method()==='PATCH'){saved.push(req.postDataJSON());return route.fulfill({json:req.postDataJSON()});}
   return route.fulfill({json:[]});
  });
  await p.goto('http://127.0.0.1:5175/scripts/tests/fixtures/video-sidebar-resize.html');await p.locator('input[type=file][accept*="video"]').first().setInputFiles('logs/two-angle-test.mp4');await p.getByRole('button',{name:'Full Telemetry',exact:true}).click();
  const video=p.locator('[data-camera=composite] video');await video.click();
  await p.keyboard.press('m');const dialog=p.getByRole('dialog').filter({has:p.getByPlaceholder('Describe the event… or tap mic to dictate')});await dialog.waitFor();
- await dialog.getByRole('button',{name:'Stop dictation',exact:true}).waitFor();const draft=dialog.getByPlaceholder('Describe the event… or tap mic to dictate');await draft.fill('Typed context.');await p.waitForTimeout(400);await dialog.getByRole('button',{name:'Stop dictation',exact:true}).click();
+ await dialog.getByRole('button',{name:'Stop dictation',exact:true}).waitFor();const draft=dialog.getByPlaceholder('Describe the event… or tap mic to dictate');await draft.fill('Typed context.');await p.waitForFunction(()=>document.querySelector('.video-event-editor textarea')?.value.includes('Cleaning feet and footrests.'),{},{timeout:15000});assert.ok(await dialog.getByRole('button',{name:'Stop dictation',exact:true}).isVisible(),'text appears while mic is still recording');await draft.fill((await draft.inputValue())+' Typed ending.');await dialog.getByRole('button',{name:'Stop dictation',exact:true}).click();
  await p.waitForFunction(()=>document.querySelector('.video-event-editor textarea')?.value.includes('Cleaning feet and footrests.'));
- assert.ok((await draft.inputValue()).startsWith('Typed context.'));assert.equal(saved.length,0,'dictation stays in the writable draft');
+ await p.waitForTimeout(350);await p.waitForFunction(()=>!document.querySelector('.video-event-editor')?.textContent.includes('Transcribing...'));assert.ok((await draft.inputValue()).startsWith('Typed context.'));assert.ok((await draft.inputValue()).endsWith('Typed ending.'));assert.equal((await draft.inputValue()).match(/Cleaning feet/g)?.length,1);assert.ok(transcriptions.length>=2);assert.equal(saved.length,0,'dictation stays in the writable draft');
  assert.ok(await dialog.evaluate(e=>{const r=e.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight+1&&Number(getComputedStyle(e).zIndex)>11000;}));
- await dialog.getByRole('button',{name:'Cancel',exact:true}).click();await video.click();await p.keyboard.press('h');await p.waitForTimeout(160);
+ await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+ slowTranscription=true;await video.click();await p.keyboard.press('m');await dialog.getByRole('button',{name:'Stop dictation',exact:true}).waitFor();await p.waitForTimeout(400);await dialog.getByRole('button',{name:'Stop dictation',exact:true}).click();await p.waitForTimeout(100);await dialog.getByRole('button',{name:'Cancel',exact:true}).click();await video.click();await p.keyboard.press('s');await draft.fill('Fresh draft.');await p.waitForTimeout(1500);assert.equal(await draft.inputValue(),'Fresh draft.','canceled request cannot overwrite the next draft');await dialog.getByRole('button',{name:'Cancel',exact:true}).click();slowTranscription=false;
+ await p.evaluate(()=>{const original=AudioContext.prototype.createAnalyser;AudioContext.prototype.createAnalyser=function(){const analyser=original.call(this);analyser.getFloatTimeDomainData=values=>values.fill(0);return analyser;};});
+ const callsBeforeSilence=transcriptions.length;await video.click();await p.keyboard.press('m');await dialog.getByRole('button',{name:'Stop dictation',exact:true}).waitFor();await p.waitForTimeout(400);await dialog.getByRole('button',{name:'Stop dictation',exact:true}).click();await dialog.getByText(/No microphone signal was detected/).waitFor();assert.equal(transcriptions.length,callsBeforeSilence,'silent mic is not sent for hallucinated transcription');await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+ await video.click();await p.keyboard.press('h');await p.waitForTimeout(160);
  const controls=p.getByLabel('Video playback controls',{exact:true});assert.equal(await controls.evaluate(e=>getComputedStyle(e).opacity),'0');await video.click();await p.waitForTimeout(150);assert.equal(await controls.evaluate(e=>getComputedStyle(e).opacity),'1');await p.keyboard.press('Digit3');assert.equal(await video.evaluate(v=>v.playbackRate),3);
  await video.click();await p.waitForTimeout(150);assert.equal(await controls.evaluate(e=>getComputedStyle(e).opacity),'0');await p.keyboard.press('h');
  assert.ok((await p.getByRole('article',{name:'Current Event',exact:true}).innerText()).includes('HR'));

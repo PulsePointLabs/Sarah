@@ -3,10 +3,9 @@ import { Link, useSearchParams } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import PageHeader from "../components/PageHeader";
 import VideoSyncPlayer from "../components/VideoSyncPlayer";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import VideoSessionPicker from '../components/VideoSessionPicker.jsx';
 import { Activity, AlertCircle, ArrowLeft, RefreshCw } from "lucide-react";
-import moment from "moment";
-import { sortVideoRecords, videoRecordDuration } from "../lib/videoRecordOrder.js";
+import { sortVideoRecords } from "../lib/videoRecordOrder.js";
 
 const RECORD_PICKER_FIELDS = [
   "date",
@@ -17,7 +16,19 @@ const RECORD_PICKER_FIELDS = [
   "no_climax",
   "title",
   "exploration_type",
+  "avg_hr", "max_hr", "tags", "is_favorite", "notes",
+  "event_timeline", "subjective_near_climax_episodes", "linked_local_videos",
+  "video_file", "video_url", "capture_video_filename", "media_videos", "video_link",
 ];
+
+async function listAllVideoRecords(entity) {
+  const records=[];
+  for(let skip=0;;skip+=200){
+    const page=await entity.listFields(RECORD_PICKER_FIELDS,'-date',200,skip,{timeoutMs:15000});
+    records.push(...page);
+    if(page.length<200)return records;
+  }
+}
 
 const VIDEO_SYNC_TIMELINE_FIELDS = [
   "session",
@@ -104,8 +115,8 @@ export default function VideoPlayer() {
     setRecordListError("");
     try {
       const [sessionResult, explorationResult] = await Promise.allSettled([
-        base44.entities.Session.listFields(RECORD_PICKER_FIELDS, "-date", 200, undefined, { timeoutMs: 15000 }),
-        base44.entities.BodyExploration.listFields(RECORD_PICKER_FIELDS, "-date", 200, undefined, { timeoutMs: 15000 }),
+        listAllVideoRecords(base44.entities.Session),
+        listAllVideoRecords(base44.entities.BodyExploration),
       ]);
       const sessionRows = sessionResult.status === "fulfilled" ? sessionResult.value : [];
       const explorationRows = explorationResult.status === "fulfilled" ? explorationResult.value : [];
@@ -204,23 +215,7 @@ export default function VideoPlayer() {
               <span className="text-sm text-muted-foreground">Loading records…</span>
             </div>
           ) : (
-            <Select value={selectedId} onValueChange={handleSelectRecord}>
-              <SelectTrigger className="h-11">
-                <SelectValue placeholder={recordType === "body_exploration" ? "Choose a body exploration record…" : "Choose a session…"} />
-              </SelectTrigger>
-              <SelectContent>
-                {records.map((record) => (
-                  <SelectItem key={record.id} value={record.id}>
-                    {recordType === "body_exploration" && (record.title || record.exploration_type) ? `${record.title || record.exploration_type} · ` : ""}
-                    {moment(record.date).format("MMM D, YYYY")}
-                    {record.start_time ? ` · ${record.start_time}` : ""}
-                    {videoRecordDuration(record) ? ` · ${videoRecordDuration(record)}` : ""}
-                    {recordType === "session" && record.no_climax ? " · NC" : ""}
-                    {(record.event_timeline || []).length > 0 ? ` · ${record.event_timeline.length} events` : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <VideoSessionPicker records={records} type={recordType} value={selectedId} onValueChange={handleSelectRecord}/>
           )}
           {recordListError && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
