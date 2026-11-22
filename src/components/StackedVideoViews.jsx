@@ -1,7 +1,7 @@
 import { Fragment, useRef, useState } from 'react';
 import { DEFAULT_VIDEO_VIEW } from '../lib/videoViewport.js';
 
-export default function StackedVideoViews({ master, secondary, masterRef, secondaryRefs, views, selected, onSelect, onReady, onReset, layout = "stacked", cleanVideo = false }) {
+export default function StackedVideoViews({ master, secondary, masterRef, secondaryRefs, views, selected, onSelect, onReady, onReset, onPlaybackClick, layout = "stacked", cleanVideo = false }) {
   const feeds = [master, secondary].filter(Boolean);
   const containerRef = useRef(null);
   const dragRef = useRef(null);
@@ -20,7 +20,7 @@ export default function StackedVideoViews({ master, secondary, masterRef, second
         <video ref={index===0?masterRef:el=>{secondaryRefs.current[feed.key]=el;}} src={feed.src}
           muted={index!==0} playsInline preload="auto" className="h-full w-full object-contain"
           style={{transform:`translate(${view.x}%, ${view.y}%) scale(${view.zoom})`,transformOrigin:'center'}}
-          onLoadedMetadata={index===0?undefined:()=>onReady(feed.key)} onClick={event=>focusPanel(event,feed.key)} />
+          onLoadedMetadata={index===0?undefined:()=>onReady(feed.key)} onClick={event=>{focusPanel(event,feed.key);onPlaybackClick?.();}} />
         {!cleanVideo && <button type="button" onClick={event=>focusPanel(event,feed.key)} className="absolute left-2 top-2 rounded bg-black/80 px-2 py-1 text-sm text-white">
           {feed.label} · {index===0?'Master':'Second angle'}{selected===feed.key?' · Selected':''}
         </button>}

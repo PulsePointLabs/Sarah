@@ -1,4 +1,4 @@
-export const telemetryMinimum = id => ({ metrics: 180, 'civet-status': 80 })[id] ?? 210;
+export const telemetryMinimum = id => ({ metrics: 180, phase:260, 'civet-status': 80 })[id] ?? 210;
 export const telemetryMaximum = id => id === 'metrics' ? 400 : 700;
 
 // Borrow space from peers down to readable floors. If those floors cannot fit,

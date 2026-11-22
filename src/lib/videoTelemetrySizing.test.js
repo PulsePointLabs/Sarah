@@ -7,7 +7,7 @@ test('defaults fit when readable floors fit; smaller views retain readable heigh
     const sizes=fitTelemetryHeights(ids,budget);
     assert.ok(Object.values(sizes).reduce((a,b)=>a+b,0)<=Math.max(budget,ids.reduce((sum,id)=>sum+telemetryMinimum(id),0))+.01);
     assert.ok(sizes.metrics<sizes.phase);
-    assert.ok(Math.abs(sizes.phase-sizes.civet)<.01);
+    assert.ok(sizes.phase>=sizes.civet);
     assert.ok(Math.abs(sizes.cardiac-sizes.civet)<.01);
   }
 });

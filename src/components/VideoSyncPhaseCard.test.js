@@ -34,16 +34,15 @@ test("card exposes accessible seek, color toggle, evidence, and separate logged 
   const html = render(Card, props);
   assert.match(html, /aria-label="Seek phase evidence timeline"/);
   assert.match(html, /aria-pressed="true"/);
-  assert.match(html, /not a calibrated climax probability/);
+  assert.match(html, /Evidence &amp; key moments/);
   assert.match(html, /Logged climax/);
-  assert.match(html, /All key moments observed/);
 });
 test("full telemetry inserts the card above cardiac trend, normal sidebar retains its layout", () => {
   const html = render(Sidebar, { ...props, phaseSession: props.session, compact: true });
   assert.ok(html.indexOf("Phase evidence at playhead") < html.indexOf("Cardiac Trend"));
   assert.match(html, /flex h-full min-h-0 flex-col gap-1 overflow-hidden/);
   assert.match(html, /flex min-h-0 flex-1 flex-col p-1.5/);
-  assert.match(html, /absolute inset-x-0 top-full/);
+  assert.match(html, /Evidence &amp; key moments/);
   assert.match(html, /Phase bands/);
   assert.match(html, /Physiology phase colors/);
   assert.doesNotMatch(render(Sidebar, props), /Phase evidence at playhead/);

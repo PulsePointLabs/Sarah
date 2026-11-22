@@ -1,4 +1,5 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import {createPortal} from "react-dom";
+import { useLayoutEffect, useMemo, useRef, useState, useEffect } from "react";
 import { buildPhaseEvidence, phaseEvidenceAt, PHASE_LABELS, PHASE_COLORS as COLORS, savedPhaseMarkers } from "../lib/videoSyncPhaseEvidence.js";
 
 import { buildLoadEvidence, LOAD_LABELS } from "../lib/videoSyncLoadEvidence.js";
@@ -7,7 +8,9 @@ const clock = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStar
 const signed = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
 
 export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, xDomain, onSeek, evidenceModel, physiologicalLoad = false }) {
-  const plotRef = useRef(null);
+  const plotRef = useRef(null),evidenceDialog=useRef(null);
+  const [evidenceOpen,setEvidenceOpen]=useState(false);
+  useEffect(()=>{if(evidenceOpen)evidenceDialog.current?.showModal();},[evidenceOpen]);
   const [plotSize, setPlotSize] = useState({ width:400, height:108 });
   useLayoutEffect(() => { const element=plotRef.current; const measure=()=>{const bounds=element.getBoundingClientRect();if(bounds.width>0&&bounds.height>0)setPlotSize(previous=>Math.abs(previous.width-bounds.width)<.5&&Math.abs(previous.height-bounds.height)<.5?previous:{width:bounds.width,height:bounds.height});};const observer=new element.ownerDocument.defaultView.ResizeObserver(measure);observer.observe(element);measure();return()=>observer.disconnect(); }, []);
   const [colorCue, setColorCue] = useState(true);
@@ -16,9 +19,9 @@ export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, x
   const current = phaseEvidenceAt(model.points, playheadS);
   const start = xDomain?.[0] ?? Math.max(0, playheadS - 60);
   const end = Math.max(start + 1, xDomain?.[1] ?? playheadS + 60);
-  const plotRight = Math.max(40, plotSize.width-8), plotBottom = Math.max(10,plotSize.height-14);
-  const x = (t) => 28 + (t - start) / (end - start) * (plotRight-28);
-  const y = value => plotBottom - value / 100 * (plotBottom-4);
+  const plotRight = Math.max(40, plotSize.width-8), plotBottom = Math.max(10,plotSize.height-24);
+  const x = (t) => 38 + (t - start) / (end - start) * (plotRight-38);
+  const y = value => plotBottom - value / 100 * (plotBottom-14);
   const visible = model.points.filter((p) => p.t >= start && p.t <= end);
   const path = (key) => {
     let move = true;
@@ -54,9 +57,9 @@ export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, x
       <svg ref={plotRef} viewBox={`0 0 ${plotSize.width} ${plotSize.height}`} role="img" aria-label={physiologicalLoad ? "Physiological load, sustained load, and recovery over session time; use the time slider to seek" : "Approach, plateau, and recovery evidence over session time; use the time slider to seek"}
         className="mt-1 block min-h-0 w-full flex-1 cursor-crosshair"
         onClick={(event) => { const bounds = event.currentTarget.getBoundingClientRect();
-          onSeek(start + Math.max(0, Math.min(1, ((event.clientX - bounds.left) / bounds.width * plotSize.width - 28) / (plotRight-28))) * (end - start)); }}>
-        {(plotSize.height<60?[0,100]:[0,50,100]).map((n) => <g key={n}><line x1="28" x2={plotRight} y1={y(n)} y2={y(n)} stroke="currentColor" opacity=".12" />
-          {plotSize.height>=40&&<text x="2" y={y(n)+3} fill="currentColor" fontSize="9">{n}</text>}</g>)}
+          onSeek(start + Math.max(0, Math.min(1, ((event.clientX - bounds.left) / bounds.width * plotSize.width - 38) / (plotRight-38))) * (end - start)); }}>
+        {(plotSize.height<100?[0,100]:[0,50,100]).map((n) => <g key={n}><line x1="38" x2={plotRight} y1={y(n)} y2={y(n)} stroke="currentColor" opacity=".12" />
+          {plotSize.height>=40&&<text x="2" y={y(n)} dominantBaseline="middle" fill="currentColor" fontSize="12">{n}</text>}</g>)}
         <path d={path("plateau")} fill="none" stroke="#fb923c" strokeWidth="1.4" strokeDasharray="4 3" />
         <path d={path("recovery")} fill="none" stroke="#38bdf8" strokeWidth="2" />
         <path d={path(physiologicalLoad ? "load" : "approach")} fill="none" stroke="#fb7185" strokeWidth="2.3" />
@@ -64,15 +67,16 @@ export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, x
           <line x1={x(m.t)} x2={x(m.t)} y1="8" y2={plotBottom} stroke="#c4b5fd" strokeDasharray="2 3" /></g>)}
         {moments.map((m, i) => <circle key={i} cx={x(m.t)} cy="9" r="3" fill={COLORS[m.kind] || "#fb7185"}><title>{`${m.label} · ${clock(m.t)}`}</title></circle>)}
         {playheadS >= start && playheadS <= end && <line x1={x(playheadS)} x2={x(playheadS)} y1="4" y2={plotBottom} stroke="currentColor" strokeWidth="1.5" />}
-        <text x="28" y={plotSize.height-2} fontSize="9" fill="currentColor">{clock(start)}</text>
-        <text x={plotRight} y={plotSize.height-2} textAnchor="end" fontSize="9" fill="currentColor">{clock(end)}</text>
+        <text x="38" y={plotSize.height-5} fontSize="12" fill="currentColor">{clock(start)}</text>
+        <text x={plotRight} y={plotSize.height-5} textAnchor="end" fontSize="12" fill="currentColor">{clock(end)}</text>
       </svg>
       <div className="video-phase-legend flex justify-between gap-1 text-[9px]"><span className="text-rose-400">{physiologicalLoad ? "Load" : "Approach"}</span>
         <span className="text-orange-400">{physiologicalLoad ? "Sustained --" : "Plateau --"}</span><span className="text-sky-400">Recovery</span>{!physiologicalLoad && <span className="text-violet-300">Logged markers ⋮</span>}</div>
       <input type="range" aria-label={physiologicalLoad ? "Seek physiological load timeline" : "Seek phase evidence timeline"} min={start} max={end} step="0.1"
         value={Math.max(start, Math.min(end, playheadS))} onChange={(e) => onSeek(Number(e.target.value))} className="mt-1 h-2 w-full accent-teal-500" />
-      <details className="mt-1 shrink-0 text-[10px]"><summary className="cursor-pointer">Evidence & key moments</summary>
-        <div className="absolute inset-x-0 top-full z-20 mt-1 max-h-[40svh] overflow-y-auto rounded-xl border border-border bg-popover p-3 text-popover-foreground shadow-xl">
+      <div className="video-phase-details shrink-0"><button type="button" onClick={()=>setEvidenceOpen(true)}>Evidence & key moments</button>
+        {evidenceOpen&&createPortal(<dialog ref={evidenceDialog} className="video-phase-evidence-dialog" aria-label="Phase evidence details" onCancel={()=>setEvidenceOpen(false)} onKeyDown={event=>event.stopPropagation()}>
+        <header><b>Evidence & key moments</b><button type="button" onClick={()=>setEvidenceOpen(false)}>Close evidence</button></header>
         <p className="text-[9px] text-muted-foreground">{physiologicalLoad ? "Relative cardiac-load estimate from HR elevation, HR trend and usable HRV change. Not a measure of pain or whole-body exertion. Scores follow saved samples." : "Review heuristic, not a calibrated climax probability. Scores follow saved samples."}</p>
         {current.reason && <p className="mt-1">{current.reason}</p>}
         {previous && <button type="button" onClick={() => onSeek(previous.t)} className="mt-1 text-left text-primary underline">
@@ -88,8 +92,8 @@ export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, x
         <p className="mt-1">All key moments observed through this playhead ({elapsedMoments.length}):</p>
         <div className="mt-1 flex flex-wrap gap-1">{elapsedMoments.map((m, i) => <button key={i} type="button" onClick={() => onSeek(m.t)}
           className="rounded border border-border px-1.5 py-1">{clock(m.t)} · {m.label}</button>)}</div>
-        </div>
-      </details>
+        </dialog>,plotRef.current.ownerDocument.fullscreenElement||plotRef.current.ownerDocument.body)}
+      </div>
     </section>
   );
 }

@@ -18,7 +18,7 @@ const {chromium}=require(path.join(os.homedir(),'.cache/codex-runtimes/codex-pri
  await keyOnly('h');await video.hover();await p.waitForTimeout(1000);
  assert.equal(await p.getByLabel('Video playback controls',{exact:true}).evaluate(e=>getComputedStyle(e).opacity),'0');
  assert.equal(await p.locator('[data-camera=composite]').getAttribute('title'),null);
- await p.getByRole('button',{name:'Show controls (H)',exact:true}).click();
+ await p.keyboard.press('h');
  await video.click();await keyOnly('s');const note=p.getByPlaceholder('Describe the event… or tap mic to dictate');await note.waitFor();
  await note.fill('HF123');await p.keyboard.press('Digit8');await p.keyboard.press('h');assert.equal(await video.evaluate(v=>v.playbackRate),2);assert.ok((await note.inputValue()).includes('8h'));
  await p.getByRole('button',{name:'Cancel',exact:true}).click();

@@ -1,3 +1,4 @@
+import VideoEventContextCard from "./VideoEventContextCard.jsx";
 import AnatomyEvidenceReview from "./AnatomyEvidenceReview.jsx";
 import TelemetryPickerMenu from './TelemetryPickerMenu.jsx';
 import StackedVideoViews from './StackedVideoViews.jsx';
@@ -46,7 +47,7 @@ import ClimaxMotionSnapshotCard from "./ClimaxMotionSnapshotCard";
 import MotionPlaybackReadout from "./MotionPlaybackReadout";
 import VideoSyncPhysiologySidebar from "./VideoSyncPhysiologySidebar";
 import { getMotionEvidenceSummary } from "@/utils/sessionMotionEvidence";
-import { cleanWhisperTranscript } from "@/utils/whisperTranscript";
+import { smoothReviewDictation } from "../lib/reviewDictation.js";
 import { isSarahNativeShell } from "@/lib/mobileApiBase";
 import { readSttProviderPreference } from "@/lib/sttSettings";
 import { bloodPressureReadingsFromSession, pulseOxReadingsFromSession } from "@/lib/sessionContext";
@@ -1072,8 +1073,10 @@ export default function VideoSyncPlayer({
   const eventsRef = useRef(events);
   const sttSupported = !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined";
   const newNoteRef = useRef(null);
+  const openEventEditorRef=useRef(null), dialogDictationEpoch=useRef(0);
+  const [playbackControlsRevealed,setPlaybackControlsRevealed]=useState(false);
 
-  const STT_PROMPT = isExploration
+  const STT_PROMPT = "Natural spoken event notes, with connected phrases and coordinated lists kept together. Example: Cleaning feet and footrests, then repositioning. Preserve the speaker’s wording. Vocabulary: " + (isExploration
     ? "Body exploration note. Foley catheter insertion. Urethral sounding observation. " +
       "Device movement at the meatus. Balloon awareness. Pressure and comfort noted. " +
       "Instrumentation paused for repositioning. Gentle withdrawal. Tissue appearance observed. " +
@@ -1083,7 +1086,7 @@ export default function VideoSyncPlayer({
     "Stimulation paused. Perineum pressure applied. Pelvic floor contraction. " +
     "E-stim via TENS unit. Foley catheter in place. Urethral stimulation. " +
     "Edging — arousal near climax. Frenulum contact. Prostate stimulation. " +
-    "Ejaculation. Refractory period. Buildup plateau. Involuntary spasm. Discomfort noted.";
+    "Ejaculation, refractory period, buildup, plateau, involuntary spasm, discomfort.").replace(/\.\s+/g, ", ");
 
   useEffect(() => {
     latestNewNoteRef.current = newNote.trim();
@@ -1422,7 +1425,7 @@ export default function VideoSyncPlayer({
       prompt: STT_PROMPT,
       provider: readSttProviderPreference(),
     });
-    return cleanWhisperTranscript(res.data?.text);
+    return smoothReviewDictation(res.data?.text);
   }, [STT_PROMPT]);
 
   const stopListening = useCallback(() => {
@@ -1433,7 +1436,9 @@ export default function VideoSyncPlayer({
 
   const startSpeechRecording = useCallback(async (mode) => {
     if (mediaRecorderRef.current?.state === "recording") return;
+    const draftEpoch=mode === "dialog" ? ++dialogDictationEpoch.current : null;
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if(mode==='dialog'&&draftEpoch!==dialogDictationEpoch.current){stream.getTracks().forEach(track=>track.stop());return;}
     mediaStreamRef.current = stream;
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
       ? "audio/webm;codecs=opus"
@@ -1460,7 +1465,9 @@ export default function VideoSyncPlayer({
       }
 
       try {
+        if(mode === "dialog" && draftEpoch!==dialogDictationEpoch.current)return;
         const text = await transcribeAudio(blob, mimeType);
+        if(mode === "dialog" && draftEpoch!==dialogDictationEpoch.current)return;
         if (mode === "quick") {
           await saveQuickVoiceEvent(text);
         } else if (text) {
@@ -1470,6 +1477,7 @@ export default function VideoSyncPlayer({
           });
         }
       } catch (error) {
+        if(mode==='dialog'&&draftEpoch!==dialogDictationEpoch.current)return;
         console.error("Speech transcription failed:", error);
         if (mode === "quick") {
           showQuickNotice("Speech-to-text failed. Nothing was saved.", "error");
@@ -1479,7 +1487,7 @@ export default function VideoSyncPlayer({
         }
       } finally {
         if (mode === "quick") setQuickTranscribing(false);
-        else setInterimText("");
+        else if(draftEpoch===dialogDictationEpoch.current)setInterimText("");
       }
     };
     recorder.start();
@@ -1596,7 +1604,7 @@ export default function VideoSyncPlayer({
 
   const commitAdd = async ({ resume = false } = {}) => {
     const cleanNote = newNote.trim();
-    if (!cleanNote || savingEvent) return;
+    if (!cleanNote || savingEvent || isListening || interimText) return;
     stopListening();
     setSavingEvent(true);
     const annotationFeed = { ...(annotationDraftFeedRef.current || selectedAnnotationFeedRef.current) };
@@ -1660,6 +1668,8 @@ export default function VideoSyncPlayer({
     setAddingNew(true);
     setTimeout(() => newNoteRef.current?.focus(), 80);
   };
+
+  openEventEditorRef.current=(dictate=false)=>{startAddAtPlayhead();if(dictate)void toggleListening();};
 
   const chartData = useMemo(() => timelineRows
     .map((r) => ({
@@ -2222,7 +2232,7 @@ export default function VideoSyncPlayer({
       if (e.defaultPrevented || active?.closest?.("[data-anatomy-dialog],[role=menu]") || active?.getAttribute?.("role") === "slider") return;
       if ((e.ctrlKey || e.altKey || e.metaKey) && !(e.ctrlKey && !e.altKey && !e.metaKey && ['ArrowLeft','ArrowRight'].includes(code))) return;
       const inInput = active?.tagName === "INPUT" || active?.tagName === "TEXTAREA" || active?.tagName === "SELECT";
-      if (fullTelemetryView && code === "KeyH" && !inInput && !active?.isContentEditable && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); active?.blur?.(); setVideoControlsHidden(v => !v); return; }
+      if (fullTelemetryView && code === "KeyH" && !inInput && !active?.isContentEditable && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); active?.blur?.(); setPlaybackControlsRevealed(false);setVideoControlsHidden(v => !v); return; }
       if (active?.isContentEditable) return;
       if (videoOnly && code === 'Escape') { e.preventDefault(); setVideoControlsHidden(false); return; }
       const focusedCamera = active?.matches?.('[data-camera]') ? active : null;
@@ -2246,7 +2256,7 @@ export default function VideoSyncPlayer({
       }
       if (isFocusShortcut({code,repeat:e.repeat,ctrlKey:e.ctrlKey,metaKey:e.metaKey,altKey:e.altKey}, active)) {
         e.preventDefault();
-        if(fullTelemetryView)setTelemetryFocus((current) => !current);
+        if(fullTelemetryView){setPlaybackControlsRevealed(false);setTelemetryFocus((current) => !current);}
         else void toggleFullscreenOverlay();
         return;
       }
@@ -2280,7 +2290,8 @@ export default function VideoSyncPlayer({
       // M: toggle timestamped voice annotation. Playback resumes only after transcription + save.
       if (code === "KeyM" && !inInput && !addingNew && !e.repeat) {
         e.preventDefault();
-        void toggleQuickDictation();
+        if(fullTelemetryView)openEventEditorRef.current?.(true);
+        else void toggleQuickDictation();
       }
 
       // S: pause video + open event form at current playhead (if not already open)
@@ -2365,7 +2376,7 @@ export default function VideoSyncPlayer({
 
   const openDualMonitor = () => {
     if (!telemetryWindow.open()) { showQuickNotice("Allow pop-ups for Sarah to open the telemetry monitor.", "error"); return; }
-    setVideoControlsHidden(false); setTelemetryFocus(false); openFullTelemetryView();
+    setVideoControlsHidden(false);setPlaybackControlsRevealed(false); setTelemetryFocus(false); openFullTelemetryView();
   };
   const closeFullTelemetryView = () => {
     telemetryWindow.close();
@@ -2646,6 +2657,7 @@ export default function VideoSyncPlayer({
 
   const handleAnnotationOpenChange = (open) => {
           if (!open) {
+            dialogDictationEpoch.current++;
             stopListening();
             setAddingNew(false);
             setAutoTagging(false);
@@ -2721,7 +2733,7 @@ export default function VideoSyncPlayer({
                 onEpisodeEdit={editSubjective} onEpisodeEditStart={() => videoRef.current?.pause()}
               />
             </div>
-            {telemetryWindow.target && <div className="monitor-events">{[{label:"Current event",entry:fullTelemetryEvents.current},{label:"Upcoming event",entry:fullTelemetryEvents.upcoming}].map(({label,entry}) => <button key={label} disabled={!entry} onClick={() => entry && seekToEvent(entry.ev,entry.i)}><div className="text-primary text-xs font-bold">{label} {entry ? fmtMmSs(entry.ev.time_s) : ""}</div><div className="text-sm">{entry?.ev?.note || "No event"}</div></button>)}</div>}
+            {telemetryWindow.target && <div className="monitor-events">{[{label:'Current event',entry:fullTelemetryEvents.current},{label:'Upcoming event',entry:fullTelemetryEvents.upcoming}].map(({label,entry})=><VideoEventContextCard key={label} label={label} entry={entry} rows={timelineRows} onSeek={({ev,i})=>seekToEvent(ev,i)}/>)}</div>}
           </aside>
   );
 
@@ -2750,36 +2762,20 @@ export default function VideoSyncPlayer({
               </div>
               {!telemetryWindow.target && cameraLayoutControls}
               <button type="button" onClick={openDualMonitor} className="rounded border border-primary/40 px-2 py-1 text-xs">Dual monitors</button>
-              <button type="button" onClick={() => setVideoControlsHidden(true)} title="Video and overlays only; H or Escape restores the display" className="shrink-0 rounded-md border border-border px-2 py-1 text-[10px]">Video only (H)</button>
+              <button type="button" onClick={() => {setPlaybackControlsRevealed(false);setVideoControlsHidden(true);}} title="Video and overlays only; H or Escape restores the display" className="shrink-0 rounded-md border border-border px-2 py-1 text-[10px]">Video only (H)</button>
               <button type="button" onClick={() => setTelemetryFocus(true)} title="Video and sidebar only (F); F or Escape restores controls" className="ml-auto shrink-0 rounded-md border border-border px-2 py-1 text-[10px]">Focus (F)</button>
               <button type="button" onClick={closeFullTelemetryView} className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-semibold text-muted-foreground hover:text-foreground">
                 <X className="h-3.5 w-3.5" /> Exit
               </button>
             </header>
 
-            <div className={`${videoOnly || telemetryFocus || telemetryWindow.target ? "hidden" : "grid"} h-[82px] shrink-0 grid-cols-2 gap-2`}>
-              {[{ label: "Current Event", entry: fullTelemetryEvents.current }, { label: "Upcoming Event", entry: fullTelemetryEvents.upcoming }].map(({ label, entry }) => (
-                <button
-                  key={label}
-                  type="button"
-                  disabled={!entry}
-                  onClick={() => entry && seekToEvent(entry.ev, entry.i)}
-                  className="min-w-0 overflow-hidden rounded-xl border border-white/10 bg-card/90 p-2 text-left disabled:cursor-default"
-                >
-                  <div className="flex items-center justify-between gap-2 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    <span>{label}</span>
-                    <span className="font-mono text-primary">{entry ? fmtMmSs(entry.ev.time_s) : "--:--"}</span>
-                  </div>
-                  <div className="mt-1 h-10 overflow-y-auto pr-1 text-[11px] leading-snug text-foreground">
-                    {entry?.ev?.note || (label === "Current Event" ? "No event has occurred yet." : "No upcoming event note.")}
-                  </div>
-                </button>
-              ))}
+            <div className={`${videoOnly || telemetryFocus || telemetryWindow.target ? 'hidden' : 'grid'} video-event-context-row shrink-0 grid-cols-2 gap-2`}>
+              {[{label:'Current Event',entry:fullTelemetryEvents.current},{label:'Upcoming Event',entry:fullTelemetryEvents.upcoming}].map(({label,entry})=><VideoEventContextCard key={label} label={label} entry={entry} rows={timelineRows} onSeek={({ev,i})=>seekToEvent(ev,i)}/>)}
             </div>
 
             <div className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black ${videoOnly ? "" : "rounded-xl border border-white/10"}`}>
-              {videoOnly&&<button type="button" onClick={()=>setVideoControlsHidden(false)} className="absolute bottom-2 right-2 z-50 rounded border border-white/30 bg-black/70 px-3 py-1 text-sm text-white">Show controls (H)</button>}
-              <StackedVideoViews cleanVideo={videoOnly} layout={cameraLayout} master={{key:activeFeedKey,label:videoFeeds[activeFeedKey]?.label || 'Master camera',src:videoFeeds[activeFeedKey]?.src || videoSrc}}
+              {videoOnly&&<button type="button" onClick={()=>setPlaybackControlsRevealed(value=>!value)} aria-pressed={playbackControlsRevealed} className="absolute bottom-2 right-2 z-50 rounded border border-white/30 bg-black/70 px-3 py-1 text-sm text-white">Playback controls</button>}
+              <StackedVideoViews onPlaybackClick={()=>{if(videoOnly||telemetryFocus)setPlaybackControlsRevealed(value=>!value);}} cleanVideo={videoOnly} layout={cameraLayout} master={{key:activeFeedKey,label:videoFeeds[activeFeedKey]?.label || 'Master camera',src:videoFeeds[activeFeedKey]?.src || videoSrc}}
                 secondary={secondAngleKey!==activeFeedKey?loadedFeeds.find(f=>f.key===secondAngleKey):null}
                 masterRef={videoRef} secondaryRefs={videoFeedRefs} views={feedViews} selected={selectedViewKey}
                 onSelect={selectView} onReady={handleSecondaryReady}
@@ -2792,7 +2788,7 @@ export default function VideoSyncPlayer({
 
             </div>
 
-            <div aria-label="Video playback controls" className={`${videoOnly ? "video-only-controls" : (telemetryWindow.target ? videoControlsHidden : telemetryFocus) ? "hidden" : ""} shrink-0 rounded-xl border border-white/10 bg-card/95 px-2 py-1.5`}>
+            <div aria-label="Video playback controls" className={`${videoOnly ? `video-only-controls ${playbackControlsRevealed?"video-only-controls-revealed":""}` : (telemetryWindow.target ? videoControlsHidden : telemetryFocus) ? `video-only-controls ${playbackControlsRevealed?"video-only-controls-revealed":""}` : ""} shrink-0 rounded-xl border border-white/10 bg-card/95 px-2 py-1.5`}>
               <div
                 className="relative h-3 cursor-pointer rounded-full bg-muted"
                 onPointerDown={handleTimelinePointerDown}
@@ -2807,7 +2803,7 @@ export default function VideoSyncPlayer({
                 {loadedFeeds.map(feed => <button key={feed.key} className={feed.key === activeFeedKey ? "text-primary" : ""} onClick={() => selectMasterFeed(feed.key)}>{feed.label}</button>)}
                 {cameraLayoutControls}
                 <button onClick={() => document.fullscreenElement ? document.exitFullscreen() : fullTelemetryRootRef.current?.requestFullscreen()}>Fullscreen</button>
-                <button onClick={() => setVideoControlsHidden(true)}>Hide controls (H)</button>
+                <button onClick={() => {setPlaybackControlsRevealed(false);setVideoControlsHidden(true);}}>Hide controls (H)</button>
                 <button onClick={closeFullTelemetryView}>Exit review</button>
                 <span>N / C: episodes | S: annotation | M: voice | Left / Right: frame</span>
               </div>}
@@ -2904,8 +2900,8 @@ export default function VideoSyncPlayer({
           portalContainer={telemetryWindow.target ? telemetryWindow.target.document.body : fullTelemetryView
             ? fullTelemetryRootRef.current
             : fullscreenActive ? fullscreenSurfaceRef.current : undefined}
-          overlayClassName="bg-transparent"
-          className="w-[calc(100vw-2rem)] max-w-lg rounded-xl border-primary/30 bg-card p-4 sm:left-auto sm:right-6 sm:top-auto sm:bottom-6 sm:translate-x-0 sm:translate-y-0"
+          overlayClassName="bg-transparent !z-[12000]"
+          className="video-event-editor !z-[12001] max-h-[90dvh] overflow-y-auto text-base w-[calc(100vw-2rem)] max-w-lg rounded-xl border-primary/30 bg-card p-4 sm:left-auto sm:right-6 sm:top-auto sm:bottom-6 sm:translate-x-0 sm:translate-y-0"
         >
           <DialogHeader className="pr-8">
             <DialogTitle className="text-sm text-primary">New Event at {fmtMmSs(playheadS)}</DialogTitle>
@@ -2947,6 +2943,7 @@ export default function VideoSyncPlayer({
                 <button
                   type="button"
                   onClick={toggleListening}
+                  aria-label={isListening ? "Stop dictation" : "Dictate"}
                   className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center border transition-colors ${isListening ? "bg-destructive/10 border-destructive text-destructive animate-pulse" : "bg-muted border-border text-muted-foreground hover:text-foreground"}`}
                   title={isListening ? "Stop dictation" : "Dictate"}
                 >
@@ -3009,12 +3006,12 @@ export default function VideoSyncPlayer({
               <p className="text-[10px] text-muted-foreground/70"><kbd className="px-1 py-0.5 rounded bg-muted border border-border font-mono text-[9px]">Enter</kbd> saves and resumes video</p>
             )}
             <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
-              <button onClick={() => { stopListening(); setAddingNew(false); }} className="flex items-center justify-center gap-1 text-xs px-3 py-2 rounded-lg bg-muted text-muted-foreground font-medium">
+              <button onClick={() => handleAnnotationOpenChange(false)} className="flex items-center justify-center gap-1 text-xs px-3 py-2 rounded-lg bg-muted text-muted-foreground font-medium">
                 <X className="w-3 h-3" /> Cancel
               </button>
               <button
                 onClick={() => commitAdd({ resume: true })}
-                disabled={!newNote.trim() || savingEvent}
+                disabled={!newNote.trim() || savingEvent || isListening || Boolean(interimText)}
                 className="flex items-center justify-center gap-1 text-xs px-3 py-2 rounded-lg bg-primary text-primary-foreground font-medium disabled:opacity-50"
               >
                 {savingEvent || autoTagging ? <span className="w-3 h-3 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" /> : <Check className="w-3 h-3" />}

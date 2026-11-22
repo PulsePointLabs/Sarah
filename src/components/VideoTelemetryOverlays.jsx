@@ -3,7 +3,7 @@ import { Children, isValidElement, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import ResizableVideoTelemetry from './ResizableVideoTelemetry.jsx';
 import './videoTelemetryOverlays.css';
-import { fits, place, restoreLayout } from '../lib/videoOverlayLayout.js';
+import { place, reflowOverlay,fitOverlayBounds } from '../lib/videoOverlayLayout.js';
 
 const STORAGE = 'sarah.videoSync.overlays.v1';
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -16,12 +16,22 @@ function clean(value) {
     }));
 }
 export function useVideoTelemetryOverlays() {
-  const [boxes, setBoxes] = useState(() => { try { return restoreLayout(clean(JSON.parse(localStorage.getItem(STORAGE)))); } catch { return {}; } });
+  const [boxes, setBoxes] = useState(() => { try { return clean(JSON.parse(localStorage.getItem(STORAGE))); } catch { return {}; } });
+  const [draft,setDraft]=useState(null),[activeId,setActiveId]=useState('');
   const [notice, setNotice] = useState(null);
   const [target, setTarget] = useState(null);
   const [pickerTarget, setPickerTarget] = useState(null);
+  const constrain=(id,box)=>{const r=target?.getBoundingClientRect();return fitOverlayBounds(id,box,r?.width,r?.height);};
+  useEffect(()=>{
+    if(!target)return undefined;
+    const observer=new ResizeObserver(()=>setBoxes(previous=>{
+      const next=Object.fromEntries(Object.entries(previous).map(([id,b])=>[id,constrain(id,b)]));
+      return JSON.stringify(previous)===JSON.stringify(next)?previous:next;
+    }));observer.observe(target);return()=>observer.disconnect();
+  },[target]);
   useEffect(() => { try { localStorage.setItem(STORAGE, JSON.stringify(boxes)); } catch { /* Storage may be unavailable. */ } }, [boxes]);
-  const update = (id, patch) => setBoxes(previous => { const next = { ...previous[id], ...patch }; return fits(next, previous, id) ? { ...previous, [id]: next } : previous; });
+  const update = (id, patch) => {setDraft(null);setBoxes(previous=>reflowOverlay(previous,id,constrain(id,{...previous[id],...patch})));};
+  const preview = (id,patch) => setDraft(reflowOverlay(boxes,id,constrain(id,{...boxes[id],...patch})));
   const toggle = id => { setNotice(null);
     const next = { ...boxes };
     if (next[id]) delete next[id];
@@ -29,19 +39,29 @@ export function useVideoTelemetryOverlays() {
       const offset = (Object.keys(next).length % 6) * .045;
       const rect=target?.getBoundingClientRect();
       const candidate = { x:.03+offset,y:.03+offset,w:Math.min(.95,Math.max(id.startsWith('metric-')?.24:.48,(id.startsWith('metric-')?200:280)/(rect?.width||1200))),h:Math.min(.95,Math.max(id.startsWith('metric-')?.25:.4,(id.startsWith('metric-')?140:240)/(rect?.height||800))),opacity:.9 };
-      const available = place(candidate, next);
-      if (available) next[id] = available;
-      else setNotice('No free space for this overlay. Shrink or remove another card first.');
+      const available = place(constrain(id,candidate), next);
+      if (available) next[id] = constrain(id,available);
+      else {next[id]=constrain(id,candidate);setActiveId(id);}
     }
     setBoxes(next);
   };
-  return { boxes, notice, target, setTarget, pickerTarget, setPickerTarget, update, toggle };
+  return { boxes:draft||boxes, notice, target, setTarget, pickerTarget, setPickerTarget, update, preview, cancelPreview:()=>setDraft(null),activeId,setActiveId,toggle };
+}
+
+function OverlayBreakout({label,children,onClose,target}) {
+  const ref=useRef(null);
+  useEffect(()=>{ref.current.showModal();},[]);
+  return createPortal(<dialog ref={ref} className="video-overlay-breakout" aria-label={`${label} breakout`} onCancel={onClose}>
+    <header><b>{label}</b><button onClick={onClose}>Close expanded card</button></header>
+    <div className="video-overlay-content">{children}</div>
+  </dialog>,target.ownerDocument.fullscreenElement||target.ownerDocument.body);
 }
 
 function FloatingTelemetry({ id, label, children, controller }) {
   const drag = useRef(null);
   const suppressClick = useRef(false);
   const [preview, setPreview] = useState(null);
+  const [expanded,setExpanded]=useState(false);
 
   const savedBox = controller.boxes[id];
   const box = preview || savedBox;
@@ -49,6 +69,7 @@ function FloatingTelemetry({ id, label, children, controller }) {
     if (event.button !== 0) return;
     event.preventDefault(); event.stopPropagation();
     suppressClick.current = true;
+    controller.setActiveId(id);
     event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId);
     const bounds = controller.target.getBoundingClientRect();
     drag.current = { mode, x: event.clientX, y: event.clientY, bounds, box: savedBox, next: savedBox };
@@ -57,16 +78,18 @@ function FloatingTelemetry({ id, label, children, controller }) {
     const d = drag.current;
     if (!d || !d.bounds.width || !d.bounds.height) return;
     const dx = (event.clientX - d.x) / d.bounds.width, dy = (event.clientY - d.y) / d.bounds.height;
+    const minW=(id.startsWith('metric-')?180:id==='phase'?360:320)/d.bounds.width,minH=(id.startsWith('metric-')?120:id==='phase'?300:230)/d.bounds.height;
     d.next = { ...d.box, ...(d.mode === 'move'
       ? { x: clamp(d.box.x + dx, 0, 1-d.box.w), y: clamp(d.box.y + dy, 0, 1-d.box.h) }
-      : { w: clamp(d.box.w + dx, Math.min(Math.max(.15,(id.startsWith('metric-')?200:280)/d.bounds.width),1-d.box.x), 1-d.box.x), h: clamp(d.box.h + dy, Math.min(Math.max(.12,(id.startsWith('metric-')?140:240)/d.bounds.height),1-d.box.y), 1-d.box.y) }) };
+      : { w: clamp(d.box.w + dx, Math.min(minW,1-d.box.x), 1-d.box.x), h: clamp(d.box.h + dy, Math.min(minH,1-d.box.y), 1-d.box.y) }) };
     // Preview can cross occupied space. Only the final drop is persisted.
     setPreview(d.next);
+    controller.preview(id,d.next);
   };
   const stop = event => { const d=drag.current; drag.current=null; setPreview(null);
-    if (d && event.type!=='pointercancel') controller.update(id,d.next);
+    if (d && event.type!=='pointercancel') controller.update(id,d.next);else controller.cancelPreview();
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); };
-  const pointerProps = { onPointerMove: move, onPointerUp: stop, onPointerCancel: stop, onLostPointerCapture: () => { drag.current = null; setPreview(null); } };
+  const pointerProps = { onPointerMove: move, onPointerUp: stop, onPointerCancel: stop, onLostPointerCapture: () => { drag.current = null; setPreview(null);controller.cancelPreview(); } };
   const keyboard = (event, mode) => {
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
     event.preventDefault();
@@ -87,16 +110,20 @@ function FloatingTelemetry({ id, label, children, controller }) {
     if (event.key === 'Delete' && event.target === event.currentTarget) { event.preventDefault(); controller.toggle(id); }
   };
   return <section data-video-overlay={id} aria-label={`${label} video overlay`} tabIndex={0} className="video-telemetry-overlay"
-    title="Click to select. + increases transparency; − decreases it. Hold Ctrl and drag to move. Delete removes."
+    data-dragging={Boolean(preview)}
+    onFocus={()=>controller.setActiveId(id)}
     onKeyDown={keyDown}
     onPointerDown={event => {
       if (event.target.closest('button,input,select,textarea,[role=slider]')) return;
       event.currentTarget.focus({preventScroll:true});
+      controller.setActiveId(id);
       if (event.ctrlKey) start(event, 'move');
     }} {...pointerProps}
     onClickCapture={event => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false; } }}
-    style={{ left: `${box.x*100}%`, top: `${box.y*100}%`, width: `${box.w*100}%`, height: `${box.h*100}%`, zIndex: preview ? 50 : undefined }}>
+    style={{ left: `${box.x*100}%`, top: `${box.y*100}%`, width: `${box.w*100}%`, height: `${box.h*100}%`, zIndex: preview||controller.activeId===id ? 100 : 1 }}>
+    <header className="video-overlay-handlebar"><button type="button" aria-label={`Move ${label} overlay`} onPointerDown={event=>start(event,'move')} onKeyDown={event=>{keyboard(event,'move');event.stopPropagation();}} {...pointerProps}>⠿ {label}</button><button type="button" aria-label={`Expand ${label} overlay`} onClick={()=>setExpanded(true)}>⤢</button></header>
     <div className="video-overlay-content" style={{ opacity: box.opacity }}>{children}</div>
+    {expanded&&<OverlayBreakout label={label} target={controller.target} onClose={()=>setExpanded(false)}>{children}</OverlayBreakout>}
     <button type="button" className="video-overlay-resize" aria-label={`Resize ${label} overlay`} title="Drag to resize; arrow keys also resize"
       onPointerDown={event => start(event, 'resize')} onKeyDown={event => { keyboard(event, 'resize'); event.stopPropagation(); }} {...pointerProps}>◢</button>
   </section>;
@@ -113,7 +140,7 @@ export default function VideoTelemetryOverlays({ children, controller, resizable
   });
   const missing = Object.keys(controller.boxes).filter(id => !entries.some(entry => entry.id === id));
   const picker = <TelemetryPickerMenu key="overlay-picker" label="Add overlays to video" summary={`${Object.keys(controller.boxes).length} selected`}
-    help="Select a card to add or remove it. Drag an overlay with Ctrl to move it, or drag its corner to resize."
+    help="Drag a card header to move it; neighbors shift aside. Drag its corner to resize. Expand opens a full-size card. Ctrl-drag on the card also moves it."
     notice={controller.notice} options={[...entries.map(({id,label})=>({id,label,checked:Boolean(controller.boxes[id]),onChange:()=>controller.toggle(id)})),
       ...missing.map(id=>({id,label:`${id} · no data (remove)`,checked:true,onChange:()=>controller.toggle(id)}))]} />;
   return <><ResizableVideoTelemetry enabled={resizable} dashboard={dashboard}>{children}</ResizableVideoTelemetry>
