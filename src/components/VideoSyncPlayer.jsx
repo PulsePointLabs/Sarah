@@ -1,6 +1,6 @@
 import VideoEventContextCard from "./VideoEventContextCard.jsx";
 import VisualEventMarkup,{VisualEventSummary,VisualVideoOverlay} from './VisualEventMarkup.jsx';
-import {captureVisualFrame} from '../lib/visualEventAnnotation.js';
+import {captureVisualFrame,visualAnnotationAIContext} from '../lib/visualEventAnnotation.js';
 import AnatomyEvidenceReview from "./AnatomyEvidenceReview.jsx";
 import TelemetryPickerMenu from './TelemetryPickerMenu.jsx';
 import StackedVideoViews from './StackedVideoViews.jsx';
@@ -1734,7 +1734,14 @@ export default function VideoSyncPlayer({
     }
     setVisualMarkupTarget(null);
   };
-  const renderVisualMarkup=()=>visualMarkupTarget?<VisualEventMarkup key={visualMarkupTarget.event?.event_id||'new-event'} initial={visualMarkupTarget.initial} eventId={visualMarkupTarget.event?.event_id} events={events} onApply={applyVisualMarkup} onClose={()=>setVisualMarkupTarget(null)}/>:null;
+  const reviewVisualMarkup=async(annotation,reference)=>{
+    const current=visualAnnotationAIContext(annotation),prior=reference?visualAnnotationAIContext(reference):{images:[],prompt:''};
+    const raw=annotation.frame.data_url;
+    const images=[...current.images,...(/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(raw)?[{filename:'unmarked-current-frame.jpg',media_type:'image/jpeg',data:raw.split(',')[1]}]:[]),...prior.images.map(image=>({...image,filename:'reference-marked-frame.jpg'}))];
+    const result=await base44.integrations.Core.InvokeLLM({foreground:true,model:'claude_sonnet_4_6',max_tokens:1800,max_images:images.length,images,response_json_schema:{type:'object',properties:{summary:{type:'string'},findings:{type:'array',items:{type:'object',properties:{label:{type:'string'},observation:{type:'string'},uncertainty:{type:'string'}},required:['label','observation','uncertainty']}}},required:['summary','findings']},prompt:`You are Sarah reviewing Ben's user-marked frame from a private ${isExploration?'body exploration':'physiological session'} video. Address him as you/your. Use a candid, anatomical, analytical tone. Describe the labeled aspects only; distinguish visible observations from local image measurements and uncertainty. Do not eroticize, infer hidden anatomy, or equate apparent size or skin-color changes with a physiological diagnosis. The current labeled image is followed by its unmarked original; the final image, when present, is the reference. Report a compact summary and one finding per relevant label. ${current.prompt}${prior.prompt?`\nREFERENCE FRAME:\n${prior.prompt}`:''}`});
+    return {summary:String(result?.summary||''),findings:Array.isArray(result?.findings)?result.findings:[]};
+  };
+  const renderVisualMarkup=()=>visualMarkupTarget?<VisualEventMarkup key={visualMarkupTarget.event?.event_id||'new-event'} initial={visualMarkupTarget.initial} eventId={visualMarkupTarget.event?.event_id} events={events} onApply={applyVisualMarkup} onReview={reviewVisualMarkup} onClose={()=>setVisualMarkupTarget(null)}/>:null;
 
   const chartData = useMemo(() => timelineRows
     .map((r) => ({

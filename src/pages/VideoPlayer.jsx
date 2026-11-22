@@ -25,6 +25,12 @@ async function listAllVideoRecords(entity) {
   const records=[];
   for(let skip=0;;skip+=200){
     const page=await entity.listFields(RECORD_PICKER_FIELDS,'-date',200,skip,{timeoutMs:15000});
+    // Older running servers do not expose count projections until restarted.
+    if(page.some(row=>row.review_event_count==null&&!Array.isArray(row.event_timeline))){
+      const legacy=await entity.listFields(['event_timeline','subjective_near_climax_episodes'],'-date',200,skip,{timeoutMs:15000});
+      const counts=new Map(legacy.map(row=>[row.id,{review_event_count:row.event_timeline?.length||0,review_episode_count:row.subjective_near_climax_episodes?.length||0}]));
+      for(const row of page)Object.assign(row,counts.get(row.id));
+    }
     records.push(...page);
     if(page.length<200)return records;
   }

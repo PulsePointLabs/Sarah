@@ -2,6 +2,7 @@ export const VISUAL_ANNOTATION_VERSION = 1;
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const clamp = value => Math.max(0, Math.min(1, value));
 export const visualClock = t => `${Math.floor(t/60)}:${String(Math.floor(t%60)).padStart(2,'0')}`;
+export const visualAnnotationSignature=annotation=>JSON.stringify({camera:annotation.camera,frame_time:annotation.frame.session_time_s,shapes:annotation.shapes.map(({id,type,label,color,points})=>({id,type,label,color,points})),calibration:annotation.calibration||null,reference_id:annotation.reference?.event_id||'',reference_revision:annotation.reference?.updated_at||''});
 
 // Map pointer input to the actual contained image, not its letterboxed SVG element.
 export function imagePoint(rect, width, height, clientX, clientY) {
