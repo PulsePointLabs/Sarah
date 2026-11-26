@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.319",
-  "commit": "73f2ba6",
-  "commitMessage": "Include useful logged equipment alongside recorded sensors",
-  "builtAt": "2026-11-26T03:11:12.380Z"
+  "version": "0.1.320",
+  "commit": "d642df9",
+  "commitMessage": "Preserve Video Sync overlay layouts and add calmer grid placement",
+  "builtAt": "2026-11-26T09:04:26.880Z"
 };
