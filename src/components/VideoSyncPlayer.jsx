@@ -1,4 +1,5 @@
 import VideoEventContextCard from "./VideoEventContextCard.jsx";
+import {useOverlayCardSetting} from './VideoOverlayPreferences.jsx';
 import VisualEventMarkup,{VisualEventSummary,VisualVideoOverlay} from './VisualEventMarkup.jsx';
 import {captureVisualFrame,visualAnnotationAIContext} from '../lib/visualEventAnnotation.js';
 import AnatomyEvidenceReview from "./AnatomyEvidenceReview.jsx";
@@ -866,7 +867,7 @@ export default function VideoSyncPlayer({
   useEffect(() => { if (!fullTelemetryView) selectView(activeFeedKey); }, [fullTelemetryView, activeFeedKey]);
   const telemetryWindow = useTelemetryWindow();
   const telemetryOverlays = useVideoTelemetryOverlays();
-  const [videoControlsHidden, setVideoControlsHidden] = useState(false);
+  const [videoControlsHidden, setVideoControlsHidden] = useOverlayCardSetting('display.controlsHidden',false,true);
   const videoOnly = fullTelemetryView && videoControlsHidden && !telemetryWindow.target;
   const [telemetryFocus, setTelemetryFocus] = useState(false);
   const [telemetryViewport, setTelemetryViewport] = useState(() => typeof window === "undefined" ? 1920 : window.innerWidth);
@@ -881,14 +882,14 @@ export default function VideoSyncPlayer({
     return () => window.removeEventListener("resize", resize);
   }, []);
   useEffect(() => {
-    if (!fullTelemetryView) { setTelemetryFocus(false); setVideoControlsHidden(false); }
+    if (!fullTelemetryView) { setTelemetryFocus(false); }
   }, [fullTelemetryView]);
   const resizeTelemetrySidebar = (width) => {
     const next = sidebarWidth(width, window.innerWidth);
     setPreferredSidebarWidth(next);
     try { localStorage.setItem("sarah.videoSync.sidebarWidth", String(next)); } catch { /* Private browser storage may be unavailable. */ }
   };
-  const [fullTelemetryChannels, setFullTelemetryChannels] = useState({ spo2: true, respiration: true, motion: true, howl: false, civet: true });
+  const [fullTelemetryChannels, setFullTelemetryChannels] = useOverlayCardSetting('display.channels',{ spo2: true, respiration: true, motion: true, howl: false, civet: true },true);
   const [feedsExpanded, setFeedsExpanded] = useState(true);
   const layoutRef = useRef(null);
   const fullscreenSurfaceRef = useRef(null);
@@ -912,7 +913,10 @@ export default function VideoSyncPlayer({
     navigator.vibrate(pattern);
   }, []);
   const widthDragStartRef = useRef({ x: 0, width: 66, layoutWidth: 1 });
-  const [zoomWindow, setZoomWindow] = useState(60);
+  const [normalZoomWindow,setNormalZoomWindow]=useState(60);
+  const [overlayZoomWindow,setOverlayZoomWindow]=useOverlayCardSetting('display.zoomWindow',60,true);
+  const zoomWindow=fullTelemetryView?overlayZoomWindow:normalZoomWindow;
+  const setZoomWindow=fullTelemetryView?setOverlayZoomWindow:setNormalZoomWindow;
   const [activeEventIdx, setActiveEventIdx] = useState(null);
   const [selectedEventFilters, setSelectedEventFilters] = useState([]);
   const [annotationSourceFilter, setAnnotationSourceFilter] = useState("both");

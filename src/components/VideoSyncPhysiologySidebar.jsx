@@ -1,10 +1,11 @@
 import CivetCard from "./CivetCard.jsx";
+import {useOverlayCardSetting,VideoOverlayPreferenceScope} from './VideoOverlayPreferences.jsx';
 import VideoTelemetryOverlays from "./VideoTelemetryOverlays.jsx";
 import EpisodeBoundaryHandle from "./EpisodeBoundaryHandle.jsx";
 import { telemetryValueChange, discreteValueChange } from "../lib/telemetryValueChange.js";
 import HowlTimelineCard from "./HowlTimelineCard.jsx";
 import { buildLoadEvidence, loadBandsFromPoints } from "../lib/videoSyncLoadEvidence.js";
-import { useMemo, useState } from "react";
+import { useContext, useMemo, useState } from "react";
 import { buildPhaseEvidence, phaseBandsFromPoints, clipPhaseBands } from "../lib/videoSyncPhaseEvidence.js";
 import PhaseBandLegend from "./PhaseBandLegend";
 import VideoSyncPhaseCard from "./VideoSyncPhaseCard";
@@ -103,6 +104,8 @@ function MetricCard({ icon: Icon, label, value, unit, detail, tone, compact = fa
 }
 
 function TrendChart({ readable = false, rows, lines, playheadS, xDomain, onSeek, rightAxis = false, compact = false, phaseBands = [], subjectiveEpisodes = [], onEpisodeEdit, onEpisodeEditStart, onEpisodePreview }) {
+  const overlay=useContext(VideoOverlayPreferenceScope);
+  if(overlay)lines=lines.map(line=>({...line,color:({hr:'#34e37e',rmssd:'#ffd43b',sdnn:'#38c8ff'})[line.key]||line.color}));
   const safePlayheadS = numberOrNull(playheadS);
   return (
     <div className={`${compact ? "min-h-0 flex-1" : "h-40"} w-full`}>
@@ -215,7 +218,7 @@ export default function VideoSyncPhysiologySidebar({
   const [episodePreview, setEpisodePreview] = useState(null);
   const displayedEpisodes = subjectiveEpisodes.map((episode) => episode.id === episodePreview?.id
     ? { ...episode, [episodePreview.boundary]: episodePreview.time } : episode);
-  const [showPhaseBands, setShowPhaseBands] = useState(true);
+  const [showPhaseBands, setShowPhaseBands] = useOverlayCardSetting('cardiac.phaseBands',true,Boolean(overlays));
   const phaseModel = useMemo(() => phaseSession ? (physiologicalLoad ? buildLoadEvidence(timelineRows) : buildPhaseEvidence(timelineRows, civet?.rows)) : null, [timelineRows, phaseSession, physiologicalLoad, civet?.rows]);
   const phaseBands = useMemo(() => (physiologicalLoad ? loadBandsFromPoints : phaseBandsFromPoints)(phaseModel?.points || []), [phaseModel, physiologicalLoad]);
   const normalizedRows = useMemo(() => timelineRows

@@ -1,11 +1,12 @@
-import { useMemo, useState } from 'react';
+import {useOverlayCardSetting} from './VideoOverlayPreferences.jsx';
+import { useMemo } from 'react';
 import { nearestPressureBurst, pressureOverview } from '../lib/videoPressureView.js';
 const fmt = (value, digits = 1) => value == null ? '—' : Number(value).toFixed(digits);
 const time = value => { const total = Math.max(0, Number(value) || 0); return `${Math.floor(total / 60)}:${String(Math.floor(total % 60)).padStart(2, '0')}`; };
 
 export default function CivetPressureReview({ rows, events, trains, train, playhead, start: requestedStart, end: requestedEnd, onSelect, onSeek, onPlay, markers, Plot }) {
-  const [navigator, setNavigator] = useState(false);
-  const [windowSeconds, setWindowSeconds] = useState('interval');
+  const [navigator, setNavigator] = useOverlayCardSetting('civet.navigator',false);
+  const [windowSeconds, setWindowSeconds] = useOverlayCardSetting('civet.window','interval');
   const envelope = useMemo(() => pressureOverview(rows), [rows]);
   const first = rows[0]?.t ?? 0, last = rows.at(-1)?.t ?? first + 1;
   const width = Number(windowSeconds);

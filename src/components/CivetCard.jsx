@@ -1,3 +1,4 @@
+import {useOverlayCardSetting} from './VideoOverlayPreferences.jsx';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { contractionSnapshot } from '../lib/civetSnapshot.js';
@@ -46,7 +47,9 @@ function Exports({sessionId,mode}) {
   return <div className="civet-export">{['samples','events','trains','analysis'].map(kind=><a key={kind} href={apiUrl(`/civet/session/${encodeURIComponent(sessionId)}/export?kind=${kind}&mode=${mode}`)}>Export {kind}{kind==='analysis'?' JSON':' CSV'}</a>)}</div>;
 }
 export default function CivetCard({rows=[],sample,playheadS,onSeek,onPlay,compact=false,statusText,analysis,sessionId,markers=[],windowSeconds=30}) {
-  const [open,setOpen]=useState(false),[portalRoot,setPortalRoot]=useState(null),[mode,setMode]=useState('reprocessed'),[layers,setLayers]=useState({raw:false,filtered:true,tonic:true,phasic:false,events:true}),[selectedTrain,setSelectedTrain]=useState(null);
+  const [open,setOpen]=useState(false),[portalRoot,setPortalRoot]=useState(null),[selectedTrain,setSelectedTrain]=useState(null);
+  const [mode,setMode]=useOverlayCardSetting('civet.mode','reprocessed');
+  const [layers,setLayers]=useOverlayCardSetting('civet.layers',{raw:false,filtered:true,tonic:true,phasic:false,events:true});
   const [view,setView]=useState(()=>{try{return ['balanced','waveform','burst'].includes(localStorage.getItem('sarah.video.pressure.view'))?localStorage.getItem('sarah.video.pressure.view'):'balanced';}catch{return 'balanced';}});
   useEffect(()=>{if(!open)return;const doc=portalRoot?.ownerDocument||document;const close=e=>{if(e.key==='Escape')setOpen(false);};doc.addEventListener('keydown',close);return()=>doc.removeEventListener('keydown',close);},[open,portalRoot]);
   const review=mode==='review'&&analysis?.review;

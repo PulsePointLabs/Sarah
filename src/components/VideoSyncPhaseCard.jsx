@@ -1,4 +1,5 @@
 import {createPortal} from "react-dom";
+import {useOverlayCardSetting} from './VideoOverlayPreferences.jsx';
 import { useLayoutEffect, useMemo, useRef, useState, useEffect } from "react";
 import { buildPhaseEvidence, phaseEvidenceAt, PHASE_LABELS, PHASE_COLORS as COLORS, savedPhaseMarkers } from "../lib/videoSyncPhaseEvidence.js";
 
@@ -13,7 +14,7 @@ export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, x
   useEffect(()=>{if(evidenceOpen)evidenceDialog.current?.showModal();},[evidenceOpen]);
   const [plotSize, setPlotSize] = useState({ width:400, height:108 });
   useLayoutEffect(() => { const element=plotRef.current; const measure=()=>{const bounds=element.getBoundingClientRect();if(bounds.width>0&&bounds.height>0)setPlotSize(previous=>Math.abs(previous.width-bounds.width)<.5&&Math.abs(previous.height-bounds.height)<.5?previous:{width:bounds.width,height:bounds.height});};const observer=new element.ownerDocument.defaultView.ResizeObserver(measure);observer.observe(element);measure();return()=>observer.disconnect(); }, []);
-  const [colorCue, setColorCue] = useState(true);
+  const [colorCue, setColorCue] = useOverlayCardSetting('phase.colorCue',true);
   const model = useMemo(() => evidenceModel || (physiologicalLoad ? buildLoadEvidence(timelineRows) : buildPhaseEvidence(timelineRows)), [timelineRows, evidenceModel, physiologicalLoad]);
   const markers = useMemo(() => physiologicalLoad ? [] : savedPhaseMarkers(session), [session, physiologicalLoad]);
   const current = phaseEvidenceAt(model.points, playheadS);
@@ -38,7 +39,7 @@ export default function VideoSyncPhaseCard({ timelineRows, session, playheadS, x
   const color = COLORS[current.phase];
   return (
     <section aria-label={physiologicalLoad ? "Physiological load at playhead" : "Phase evidence at playhead"} className="video-phase-card relative flex h-[clamp(180px,28svh,240px)] shrink-0 flex-col rounded-xl border p-2 transition-colors duration-300"
-      style={{ borderColor: color, backgroundColor: colorCue ? `${color}22` : "transparent" }}>
+      style={{ borderColor: color, backgroundColor: colorCue ? `${color}22` : "transparent",'--phase-cue-fill':colorCue?`${color}18`:'transparent' }}>
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-[10px] font-bold uppercase tracking-wider">{physiologicalLoad ? "Physiological load" : "Build · Plateau · Recovery"}</h3>
         <button type="button" aria-pressed={colorCue} onClick={() => setColorCue(!colorCue)}

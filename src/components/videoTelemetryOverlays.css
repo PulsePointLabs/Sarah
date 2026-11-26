@@ -65,3 +65,33 @@
 @media(pointer:coarse){.video-overlay-resize{width:40px;height:40px}.video-overlay-handlebar{height:36px}.video-overlay-handlebar button{min-height:34px}}
 
 .video-telemetry-overlay[data-dragging=true]{transition:none;box-shadow:0 0 0 2px #62dcc8,0 12px 32px #0008}
+
+/* Sarah Monitor palette: ink panels, a thin identity border and a compact title. */
+.video-telemetry-overlay,.video-overlay-breakout{--primary:148 76% 55%;--foreground:207 43% 93%;--muted-foreground:209 24% 64%;--border:211 45% 16%;color:#e6eef5;background:linear-gradient(160deg,rgba(var(--overlay-accent-rgb,85,228,206),.11),#07111a 80%);border:1px solid rgba(var(--overlay-accent-rgb,85,228,206),.4);border-radius:8px;box-shadow:0 3px 12px #0005}
+.video-telemetry-overlay:focus-within{border:1px solid var(--overlay-accent);box-shadow:0 0 0 1px rgba(var(--overlay-accent-rgb),.3),0 4px 14px #0005}
+.video-overlay-handlebar{height:28px;padding:0 5px;background:transparent;border-radius:7px 7px 0 0;border-bottom:1px solid rgba(var(--overlay-accent-rgb),.12);gap:3px}
+.video-overlay-handlebar::before{content:'';width:3px;height:12px;flex:none;border-radius:2px;background:var(--overlay-accent)}
+.video-overlay-handlebar button{color:var(--overlay-accent);font-size:14px;font-weight:600;min-height:26px}
+.video-overlay-handlebar button:last-child{font-size:18px;min-width:28px}
+.video-overlay-content{background:transparent;border-radius:0 0 7px 7px}
+.video-overlay-content>:first-child{border:0!important;border-radius:0!important;background:transparent!important;padding:5px 7px!important;box-shadow:none!important}
+.video-overlay-content .telemetry-metric-card{align-items:stretch!important;text-align:left!important;padding:6px 8px!important;background:transparent!important;box-shadow:none!important;gap:4px}
+.video-overlay-content .telemetry-metric-card>div:first-child{display:none}
+.video-overlay-content .telemetry-metric-card>.monitor-metric-value{font-weight:600;letter-spacing:-.04em;font-size:clamp(36px,min(28cqw,44cqh),170px)!important;justify-content:center;align-content:center}
+.video-telemetry-overlay:is([data-video-overlay=metric-heart-rate],[data-video-overlay=metric-rmssd],[data-video-overlay=metric-sdnn]) .monitor-metric-value{color:#34e37e;text-shadow:0 0 16px #34e37e36}
+.video-overlay-content .telemetry-metric-card>p:not(.monitor-metric-value){border:1px solid rgba(var(--overlay-accent-rgb),.2);background:rgba(var(--overlay-accent-rgb),.07);border-radius:4px;padding:3px 5px;text-align:center;flex:none}
+.video-overlay-content .telemetry-metric-card>p:not(.monitor-metric-value)>span{font-size:14px!important}
+.video-overlay-content>[data-sidebar-section]>div:first-child>p:first-child{display:none}
+.video-overlay-content .video-phase-card>div:first-child>h3{font-size:14px!important;letter-spacing:.03em;color:#8ca3b8}
+.video-overlay-content .video-phase-card>div:first-child>button{margin-left:auto;font-size:14px!important}
+.video-overlay-content .recharts-cartesian-grid line{stroke:#13202e!important}.video-overlay-content .recharts-cartesian-axis-tick text{fill:#8ca3b8}
+.video-overlay-resize{background:linear-gradient(135deg,transparent 50%,rgba(var(--overlay-accent-rgb),.16) 50%);color:var(--overlay-accent);border-radius:0 0 6px 0;width:28px;height:28px}
+.video-telemetry-overlay[data-dragging=true]{opacity:.86;border-color:var(--overlay-accent);box-shadow:0 0 0 1px var(--overlay-accent),0 12px 30px #0009;transition:none}
+.video-overlay-snap-grid{position:absolute;inset:0;pointer-events:none;z-index:0;background-image:linear-gradient(to right,#55e4ce22 1px,transparent 1px),linear-gradient(to bottom,#55e4ce22 1px,transparent 1px)}
+.video-overlay-empty{display:flex;justify-content:center;align-items:center;text-align:center;gap:8px;padding:12px;color:#8ca3b8}.video-overlay-empty strong{color:var(--overlay-accent)}
+.video-telemetry-overlay,.video-overlay-breakout{background-color:#02060b}
+.video-overlay-content .monitor-metric-value>span{letter-spacing:0}
+.video-overlay-content>.video-phase-card{background:var(--phase-cue-fill,transparent)!important}
+:is(.video-telemetry-overlay[data-video-overlay=autonomic],.video-overlay-breakout[data-overlay-kind=autonomic]) .text-teal-500{color:#ffd43b}
+:is(.video-telemetry-overlay[data-video-overlay=autonomic],.video-overlay-breakout[data-overlay-kind=autonomic]) .text-violet-500{color:#38c8ff}
+@media(pointer:coarse){.video-overlay-handlebar{height:34px}.video-overlay-handlebar button{min-height:32px}.video-overlay-resize{width:40px;height:40px}}

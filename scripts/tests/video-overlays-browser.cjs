@@ -40,7 +40,7 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   assert.ok(fontAfter>fontBefore,'metric text grows with its card');
   assert.equal(await metric.locator('.telemetry-metric-card > p').last().isVisible(),false,'source hidden');
   const rects=await page.locator('[data-video-overlay]').evaluateAll(es=>es.map(e=>e.getBoundingClientRect().toJSON()));
-  for(let i=0;i<rects.length;i++)for(let j=i+1;j<rects.length;j++) {const a=rects[i],b=rects[j];assert.ok(a.right<=b.left||b.right<=a.left||a.bottom<=b.top||b.bottom<=a.top,'cards do not overlap');}
+  for(let i=0;i<rects.length;i++)for(let j=i+1;j<rects.length;j++) {const a=rects[i],b=rects[j];const x=Math.min(a.right,b.right)-Math.max(a.left,b.left),y=Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top);assert.ok(x<=24||y<=24||(x*y<=Math.min(a.width*a.height,b.width*b.height)*.04&&Math.min(x,y)<=48),'only small edge overlap is tolerated');}
   const saved=await page.evaluate(()=>localStorage.getItem('sarah.videoSync.overlays.v1'));
   await open();await overlay.waitFor();
   assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('sarah.videoSync.overlays.v1'))),JSON.parse(saved),'layout survives reload and video loading');

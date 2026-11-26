@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import {useOverlayCardSetting} from './VideoOverlayPreferences.jsx';
+import { useMemo } from 'react';
 import { ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, ReferenceLine } from 'recharts';
 import { howlTimeline, howlAt, howlClock, howlGraphData, HOWL_GRAPH_GROUPS, howlChangeSummary, howlCommandGraphData } from '../lib/howlTimeline.js';
 
@@ -14,7 +15,7 @@ function ChangeRow({ point, onSeek }) {
 }
 
 export default function HowlTimelineCard({ rows = [], error, onRetry, playheadS = 0, xDomain, onSeek, compact = false, offset = 0 }) {
-  const [parameter,setParameter]=useState('power');
+  const [parameter,setParameter]=useOverlayCardSetting('howl.parameter','power');
   const points=useMemo(()=>howlTimeline(rows,offset),[rows,offset]);
   const commandOnly=points.length>0 && points.every(p=>p.connection_state==='command');
   const chartRows=useMemo(()=>commandOnly?howlCommandGraphData(points):howlGraphData(points),[points,commandOnly]);
