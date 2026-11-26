@@ -12,6 +12,7 @@ const {chromium}=require(path.join(os.homedir(),'.cache/codex-runtimes/codex-pri
   const req=route.request(),url=new URL(req.url()),pathname=url.pathname;
   if(pathname.includes('/src/'))return route.continue();
   const json=body=>route.fulfill({json:body});
+ if(url.pathname==='/api/session-video/review-summaries')return json({snapshots:[]});
   if(req.method()==='GET'&&pathname==='/api/entities/Session')return json(records.map(({id,date})=>({id,date})));
   const record=records.find(r=>pathname===`/api/entities/Session/${r.id}`);
   if(record&&req.method()==='GET'){details.push(record.id);if(slowA&&record.id==='record-a')await new Promise(r=>setTimeout(r,650));return json(record);}
@@ -28,10 +29,10 @@ const {chromium}=require(path.join(os.homedir(),'.cache/codex-runtimes/codex-pri
  failTimeline=true;await p.getByRole('button',{name:'Refresh selected',exact:true}).click();
  await p.getByText(/Saved videos, events and marked episodes are loaded/).waitFor();await p.getByRole('button',{name:'Visible Events (1)',exact:true}).waitFor();
  failTimeline=false;slowA=true;
- await p.getByRole('combobox').first().click();await p.getByRole('option',{name:/Oct 27, 2026/}).click();
+ await p.getByRole('combobox').first().click();await p.getByRole('option').filter({hasText:'Oct 27, 2026'}).click();
  await p.getByRole('button',{name:'Visible Events (2)',exact:true}).waitFor();
- await p.getByRole('combobox').first().click();await p.getByRole('option',{name:/Oct 20, 2026/}).click();
- await p.getByRole('combobox').first().click();await p.getByRole('option',{name:/Oct 27, 2026/}).click();
+ await p.getByRole('combobox').first().click();await p.getByRole('option').filter({hasText:'Oct 20, 2026'}).click();
+ await p.getByRole('combobox').first().click();await p.getByRole('option').filter({hasText:'Oct 27, 2026'}).click();
  await p.getByRole('button',{name:'Visible Events (2)',exact:true}).waitFor();await p.waitForTimeout(850);
  assert.ok(await p.getByRole('button',{name:'Near-climax / climax episodes (2)',exact:true}).count());assert.equal(await p.getByRole('button',{name:'Visible Events (1)',exact:true}).count(),0);
  assert.ok(details.includes('record-a')&&details.includes('record-b'));assert.deepEqual(writes,[]);assert.deepEqual(errors,[]);

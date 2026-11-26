@@ -127,6 +127,12 @@ export default function Layout() {
   const [statusLoading, setStatusLoading] = useState(false);
   const [statusError, setStatusError] = useState("");
   const [uiPrefs, setUiPrefs] = useState(readUiPreferences);
+  useEffect(()=>{
+    const root=document.documentElement;
+    root.classList.remove(...[...root.classList].filter(name=>name==='dark'||name.startsWith('theme-')||name.startsWith('text-scale-')));
+    root.classList.add(...`${uiColorSchemeClass(uiPrefs)} ${uiPreferenceClasses(uiPrefs)}`.split(/\s+/).filter(Boolean));
+    root.style.colorScheme=uiColorSchemeClass(uiPrefs)==='dark'?'dark':'light';
+  },[uiPrefs]);
   const mainRef = useRef(null);
   const saveTimerRef = useRef(null);
   const currentNavLabel = useMemo(

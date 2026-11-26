@@ -1,3 +1,4 @@
+import {recordFlag} from "../../lib/sessionRecordFlags.js";
 import { Link } from "react-router-dom";
 import moment from "moment";
 import { ChevronRight } from "lucide-react";
@@ -27,12 +28,12 @@ export default function RecentSessionsWidget({ sessions }) {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5">
                 <span className="text-xs font-medium">{moment(s.date).format("MMM D")}</span>
-                {s.is_favorite && <span className="text-[9px] text-chart-4">★</span>}
-                {s.no_climax && <span className="text-[9px] text-muted-foreground bg-muted px-1 rounded">no climax</span>}
+                {recordFlag(s.is_favorite) && <span className="text-[9px] text-chart-4">★</span>}
+                {recordFlag(s.no_climax) && <span className="text-[9px] text-muted-foreground bg-muted px-1 rounded">no climax</span>}
               </div>
               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                {s.intensity && <span className="text-[10px] text-muted-foreground">I: <span className="font-mono text-foreground">{s.intensity}</span></span>}
-                {s.satisfaction && <span className="text-[10px] text-muted-foreground">S: <span className="font-mono text-foreground">{s.satisfaction}</span></span>}
+                {Boolean(s.intensity) && <span className="text-[10px] text-muted-foreground">I: <span className="font-mono text-foreground">{s.intensity}</span></span>}
+                {Boolean(s.satisfaction) && <span className="text-[10px] text-muted-foreground">S: <span className="font-mono text-foreground">{s.satisfaction}</span></span>}
                 {s.hr_at_climax && <span className="text-[10px] text-muted-foreground">♥ <span className="font-mono text-foreground">{s.hr_at_climax}</span></span>}
                 {s.mood && <span className="text-[10px] text-muted-foreground capitalize">{s.mood}</span>}
               </div>

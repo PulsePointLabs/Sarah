@@ -14,3 +14,29 @@
 .video-session-picker-option{position:relative;display:flex;align-items:start;gap:10px;width:100%;text-align:left;border:1px solid hsl(var(--border));border-radius:9px;background:hsl(var(--card));padding:10px 12px;flex-shrink:0}
 .video-session-picker-option:hover,.video-session-picker-option[aria-selected=true]{border-color:hsl(var(--primary)/.7);background:hsl(var(--primary)/.07)}
 .video-session-picker-check{width:20px;height:20px;color:hsl(var(--primary));flex-shrink:0}.video-session-picker-empty{padding:20px 8px;font-size:16px;color:hsl(var(--muted-foreground))}
+
+/* Portal surfaces inherit the same theme tokens as the application shell. */
+.video-session-picker-panel{background:hsl(var(--popover));color:hsl(var(--popover-foreground));border:1px solid hsl(var(--border));box-shadow:0 18px 60px #0004;max-height:min(760px,var(--radix-popover-content-available-height))}
+.video-session-picker-trigger{background:linear-gradient(115deg,hsl(var(--primary)/.07),hsl(var(--card)) 58%);color:hsl(var(--card-foreground));padding:14px}
+.video-session-card{min-width:0;width:100%;display:flex;flex-direction:column;gap:9px}
+.video-session-card-heading{display:flex;align-items:start;justify-content:space-between;gap:8px 18px}
+.video-session-card-name{min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:7px 10px}
+.video-session-picker-title{font-size:18px;line-height:1.25}
+.video-session-date-labels{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:5px;flex-shrink:0;max-width:52%}
+.video-session-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid hsl(var(--border));border-radius:7px;padding:4px 7px;font-size:14px;line-height:1.2;white-space:nowrap;background:hsl(var(--muted)/.45);color:hsl(var(--muted-foreground));font-variant-numeric:tabular-nums}
+.video-session-chip svg,.video-session-snapshot-label svg{height:14px;width:14px;flex-shrink:0}
+.video-session-outcome{font-size:13px;font-weight:600;border:1px solid hsl(var(--border));border-radius:999px;padding:3px 7px;color:hsl(var(--muted-foreground));white-space:nowrap}
+.video-session-outcome[data-tone=climax]{background:hsl(var(--primary)/.12);border-color:hsl(var(--primary)/.5);color:hsl(var(--primary))}
+.video-session-outcome[data-tone=near]{background:hsl(var(--chart-4)/.12);border-color:hsl(var(--chart-4)/.4);color:hsl(var(--foreground))}
+.video-session-devices{display:flex;gap:5px;flex-wrap:wrap}
+.video-session-device{font-size:13px;border:1px solid hsl(var(--primary)/.25);background:hsl(var(--primary)/.06);color:hsl(var(--foreground));border-radius:5px;padding:2px 7px}
+.video-session-no-data{font-size:13px;color:hsl(var(--muted-foreground))}
+.video-session-snapshots{display:flex;flex-wrap:wrap;gap:7px 16px}
+.video-session-snapshot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 8px;background:hsl(var(--muted)/.35);border:1px solid hsl(var(--border));border-radius:8px;line-height:1.2}
+.video-session-snapshot>span{display:inline-flex;align-items:center;gap:5px;font-variant-numeric:tabular-nums;font-size:16px}.video-session-snapshot small{font-size:12px;color:hsl(var(--muted-foreground))}.video-session-snapshot .video-session-snapshot-label{font-size:14px;font-weight:600;margin-right:4px}.video-session-snapshot-label svg{color:hsl(var(--primary))}
+.video-session-picker-metrics{margin-top:0;padding-top:8px;border-top:1px solid hsl(var(--border)/.65);gap:5px;align-items:center}
+.video-session-duration{font-weight:700;background:hsl(var(--primary)/.12);color:hsl(var(--primary));border-color:hsl(var(--primary)/.35);font-size:16px}
+.video-session-picker-metrics .video-session-duration{font-size:16px}.video-session-picker-preview{margin-top:0;color:hsl(var(--muted-foreground));font-size:14px;line-height:1.35}
+.video-session-picker-option{padding:12px;background:linear-gradient(110deg,hsl(var(--primary)/.035),hsl(var(--card)) 65%)}
+@media(max-width:600px){.video-session-card-heading{flex-wrap:wrap}.video-session-date-labels{max-width:100%;justify-content:flex-start}.video-session-snapshot{width:100%;gap:7px}.video-session-snapshot .video-session-snapshot-label{margin-right:auto}.video-session-picker-option{padding:10px}.video-session-picker-title{font-size:17px}}
+@media(max-width:600px){.video-session-snapshot[aria-label="Pelvic pressure snapshot"]{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}.video-session-snapshot[aria-label="Pelvic pressure snapshot"]>.video-session-snapshot-label,.video-session-snapshot[aria-label="Pelvic pressure snapshot"]>.video-session-raw{grid-column:1/-1}.video-session-snapshot[aria-label="Pelvic pressure snapshot"]>span:not(.video-session-snapshot-label){justify-content:center}}

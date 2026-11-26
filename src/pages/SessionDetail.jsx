@@ -1,3 +1,4 @@
+import {recordFlag} from "../lib/sessionRecordFlags.js";
 import { CivetSession } from "../components/CivetCard.jsx";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
@@ -1952,9 +1953,9 @@ export default function SessionDetail() {
           <p className="flex min-w-0 flex-wrap items-center gap-1 text-sm text-muted-foreground">
             {s.start_time && <><Clock className="w-3 h-3" />{s.start_time}</>}
             {s.end_time && ` – ${s.end_time}`}
-            {s.duration_minutes && <> · <strong>{s.duration_minutes}m</strong></>}
-            {s.is_quick_entry && <><Zap className="w-3 h-3 ml-1" /> Quick</>}
-            {s.no_climax && (
+            {Boolean(s.duration_minutes) && <> · <strong>{s.duration_minutes}m</strong></>}
+            {recordFlag(s.is_quick_entry) && <><Zap className="w-3 h-3 ml-1" /> Quick</>}
+            {recordFlag(s.no_climax) && (
               <span className="inline-flex items-center gap-1 ml-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30">
                 <XCircle className="w-3 h-3" /> No Climax
               </span>
@@ -2215,7 +2216,7 @@ export default function SessionDetail() {
               </div>
             ))}
           </div>
-          {!s.no_climax && (s.hr_avg_pre_to_climax || s.hr_avg_at_climax_window) && (
+          {!s.no_climax && Boolean(s.hr_avg_pre_to_climax || s.hr_avg_at_climax_window) && (
             <div className="grid grid-cols-2 gap-2">
               {s.hr_avg_pre_to_climax && (
                 <div className="flex items-center justify-between rounded-lg bg-chart-2/10 px-3 py-2">

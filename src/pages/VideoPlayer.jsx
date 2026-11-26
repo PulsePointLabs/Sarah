@@ -6,6 +6,7 @@ import VideoSyncPlayer from "../components/VideoSyncPlayer";
 import VideoSessionPicker from '../components/VideoSessionPicker.jsx';
 import { Activity, AlertCircle, ArrowLeft, RefreshCw } from "lucide-react";
 import { sortVideoRecords } from "../lib/videoRecordOrder.js";
+import {apiUrl} from '../lib/mobileApiBase.js';
 
 const RECORD_PICKER_FIELDS = [
   "date",
@@ -19,12 +20,27 @@ const RECORD_PICKER_FIELDS = [
   "avg_hr", "max_hr", "tags", "is_favorite", "notes",
   "review_event_count", "review_episode_count", "linked_local_videos",
   "video_file", "video_url", "capture_video_filename", "media_videos", "video_link",
+  "review_snapshot", "min_hr", "climax_offset_s", "climax_duration", "hr_source", "hr_source_label",
 ];
+
+let snapshotEndpointAvailable=true;
+async function refreshReviewSnapshots(records,entity) {
+  if(!snapshotEndpointAvailable||!records.length)return [];
+  const snapshots=[];
+  for(let i=0;i<records.length;i+=200){
+    const response=await fetch(apiUrl('/session-video/review-summaries'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({records:records.slice(i,i+200).map(record=>({entity,id:record.id}))})});
+    if(response.status===404){snapshotEndpointAvailable=false;return [];}
+    if(!response.ok)throw Error('Recorded snapshots could not be refreshed.');
+    const data=await response.json();snapshots.push(...(data.snapshots||[]));
+  }
+  return snapshots;
+}
 
 async function listAllVideoRecords(entity) {
   const records=[];
   for(let skip=0;;skip+=200){
     const page=await entity.listFields(RECORD_PICKER_FIELDS,'-date',200,skip,{timeoutMs:15000});
+    for(const row of page)if(row.review_snapshot?.event_count!=null){row.review_event_count=row.review_snapshot.event_count;row.review_episode_count=row.review_snapshot.episode_count;}
     // Older running servers do not expose count projections until restarted.
     if(page.some(row=>row.review_event_count==null&&!Array.isArray(row.event_timeline))){
       const legacy=await entity.listFields(['event_timeline','subjective_near_climax_episodes'],'-date',200,skip,{timeoutMs:15000});
@@ -74,6 +90,7 @@ export default function VideoPlayer() {
   const [recordLoadError, setRecordLoadError] = useState("");
   const recordTypeRef = useRef(recordType);
   const recordRequest = useRef(0);
+  const optionsRequest=useRef(0);
 
   useEffect(() => {
     recordTypeRef.current = recordType;
@@ -117,6 +134,7 @@ export default function VideoPlayer() {
   }, []);
 
   const loadRecordOptions = useCallback(async () => {
+    const request=++optionsRequest.current;
     setLoading(true);
     setRecordListError("");
     try {
@@ -128,6 +146,13 @@ export default function VideoPlayer() {
       const explorationRows = explorationResult.status === "fulfilled" ? explorationResult.value : [];
       setSessions(sortVideoRecords(sessionRows));
       setExplorations(sortVideoRecords(explorationRows));
+      const enrich=(rows,entity,setRows)=>refreshReviewSnapshots(rows,entity).then(snapshots=>{
+        if(request!==optionsRequest.current||!snapshots.length)return;
+        const byId=new Map(snapshots.map(snapshot=>[snapshot.id,snapshot]));
+        setRows(previous=>previous.map(record=>byId.has(record.id)?{...record,review_snapshot:byId.get(record.id)}:record));
+      }).catch(()=>{/* Persisted snapshots and recorded metadata stay usable offline. */});
+      void enrich(sessionRows,'Session',setSessions);
+      void enrich(explorationRows,'BodyExploration',setExplorations);
 
       const failures = [sessionResult, explorationResult].filter((result) => result.status === "rejected");
       if (failures.length) {

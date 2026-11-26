@@ -14,8 +14,13 @@ import {
   saveUploadChunk,
 } from '../services/sessionVideoPipeline.js';
 import { runProcess } from '../services/ttsCore.js';
+import {loadSessionReviewSnapshots} from '../services/sessionReviewSnapshots.js';
 
 export const sessionVideoRouter = express.Router();
+sessionVideoRouter.post('/review-summaries',async(req,res)=>{
+  if(!Array.isArray(req.body?.records)||req.body.records.length>200)return res.status(400).json({error:'Provide up to 200 record IDs.'});
+  try{res.json({snapshots:await loadSessionReviewSnapshots(req.body.records)});}catch(error){res.status(500).json({error:error.message});}
+});
 
 function publicRecording(recording = {}) {
   if (!recording) return null;

@@ -1,3 +1,4 @@
+import {recordFlag} from "../lib/sessionRecordFlags.js";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -141,12 +142,12 @@ export default function SessionCard({ session, selectable, selected, onSelect, o
           )}
           <div>
             <p className="text-sm font-semibold">{date}</p>
-            {(session.start_time || session.duration_minutes) && (
+            {Boolean(session.start_time || session.duration_minutes) && (
               <p className="text-xs text-muted-foreground flex items-center gap-1">
                 <Clock className="w-3 h-3" />
                 {session.start_time}
                 {session.end_time && ` – ${session.end_time}`}
-                {session.duration_minutes && ` (${session.duration_minutes}m)`}
+                {Boolean(session.duration_minutes) && ` (${session.duration_minutes}m)`}
               </p>
             )}
             <p className="mt-0.5 text-[11px] text-muted-foreground/80" title={updatedTitle}>
@@ -155,7 +156,7 @@ export default function SessionCard({ session, selectable, selected, onSelect, o
           </div>
         </div>
         <div className="flex items-center gap-1.5">
-          {session.no_climax && (
+          {recordFlag(session.no_climax) && (
             <span className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30">
               <XCircle className="w-2.5 h-2.5" /> NC
             </span>
@@ -190,8 +191,8 @@ export default function SessionCard({ session, selectable, selected, onSelect, o
                 : motionEvidence.hasSavedTelemetry ? "Telemetry Only" : "Motion Events"}
             </span>
           )}
-          {session.is_quick_entry && <Zap className="w-4 h-4 text-primary" />}
-          {session.is_favorite && <Star className="w-4 h-4 text-yellow-500 fill-yellow-500" />}
+          {recordFlag(session.is_quick_entry) && <Zap className="w-4 h-4 text-primary" />}
+          {recordFlag(session.is_favorite) && <Star className="w-4 h-4 text-yellow-500 fill-yellow-500" />}
           {!selectable && onDelete && (
             <AlertDialog>
               <AlertDialogTrigger asChild>
@@ -238,7 +239,7 @@ export default function SessionCard({ session, selectable, selected, onSelect, o
             {session.no_climax ? "Arousal" : "Int"}: {session.intensity}/10
           </span>
         </div>
-        {session.satisfaction && (
+        {Boolean(session.satisfaction) && (
           <span className="text-xs text-muted-foreground">Sat: {session.satisfaction}/10</span>
         )}
         {eventCount > 0 && (
