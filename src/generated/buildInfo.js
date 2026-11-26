@@ -1,7 +1,7 @@
 export const BUILD_INFO = {
   "appName": "Sarah",
-  "version": "0.1.318",
-  "commit": "f221179",
-  "commitMessage": "Sample remote Android video frames without changing playback CORS behavior",
-  "builtAt": "2026-11-22T04:42:56.970Z"
+  "version": "0.1.319",
+  "commit": "73f2ba6",
+  "commitMessage": "Include useful logged equipment alongside recorded sensors",
+  "builtAt": "2026-11-26T03:11:12.380Z"
 };
