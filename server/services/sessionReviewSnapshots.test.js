@@ -28,6 +28,7 @@ test('snapshot worker summarizes actual telemetry without altering original reco
 
 test('outcome badges use explicit records rather than missing flags or AI likelihood',()=>{
   assert.equal(sessionOutcome({no_climax:0}).label,'Outcome not logged');
+  assert.equal(sessionOutcome({climax_offset_s:''}).label,'Outcome not logged');
   assert.equal(sessionOutcome({climax_offset_s:120,no_climax:0}).label,'Climax logged');
   assert.equal(sessionOutcome({climax_duration:12,no_climax:1}).label,'Outcome needs review');
   assert.equal(sessionOutcome({ai_near_climax_events:[{}]}).label,'Outcome not logged');

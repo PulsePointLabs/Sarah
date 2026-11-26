@@ -5,7 +5,7 @@ const positive=value=>value!=null&&value!==''&&Number.isFinite(Number(value))&&N
 export function sessionOutcome(record,type='session') {
   if(type==='body_exploration')return {label:'Body exploration',tone:'neutral'};
   const marked=Array.isArray(record.subjective_near_climax_episodes)?record.subjective_near_climax_episodes:[];
-  const climax=(record.climax_offset_s!=null&&Number.isFinite(Number(record.climax_offset_s))&&Number(record.climax_offset_s)>=0)||positive(record.climax_duration)!=null||marked.some(e=>e.kind==='climax'&&Number(e.end_s)>Number(e.start_s));
+  const climax=(record.climax_offset_s!=null&&String(record.climax_offset_s).trim()!==''&&Number.isFinite(Number(record.climax_offset_s))&&Number(record.climax_offset_s)>=0)||positive(record.climax_duration)!=null||marked.some(e=>e.kind==='climax'&&Number(e.end_s)>Number(e.start_s));
   const near=marked.some(e=>e.kind==='near_climax'&&Number(e.end_s)>Number(e.start_s));
   if(climax&&recordFlag(record.no_climax))return {label:'Outcome needs review',tone:'neutral'};
   if(climax)return {label:'Climax logged',tone:'climax'};
