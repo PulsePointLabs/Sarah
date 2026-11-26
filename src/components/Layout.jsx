@@ -130,7 +130,8 @@ export default function Layout() {
   useEffect(()=>{
     const root=document.documentElement;
     root.classList.remove(...[...root.classList].filter(name=>name==='dark'||name.startsWith('theme-')||name.startsWith('text-scale-')));
-    root.classList.add(...`${uiColorSchemeClass(uiPrefs)} ${uiPreferenceClasses(uiPrefs)}`.split(/\s+/).filter(Boolean));
+    // Share palette with portals without scaling rem-based fonts a second time.
+    root.classList.add(...`${uiColorSchemeClass(uiPrefs)} theme-${uiPrefs.theme||DEFAULT_UI_PREFS.theme}`.split(/\s+/).filter(Boolean));
     root.style.colorScheme=uiColorSchemeClass(uiPrefs)==='dark'?'dark':'light';
   },[uiPrefs]);
   const mainRef = useRef(null);
