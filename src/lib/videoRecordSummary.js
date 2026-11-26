@@ -2,6 +2,10 @@ import { videoRecordDuration } from './videoRecordOrder.js';
 import {recordFlag} from './sessionRecordFlags.js';
 
 const positive=value=>value!=null&&value!==''&&Number.isFinite(Number(value))&&Number(value)>0?Number(value):null;
+export function recordedEquipment(record) {
+  const names=[...(Array.isArray(record.methods)?record.methods:[]),...(Array.isArray(record.devices)?record.devices:[])].map(value=>typeof value==='string'?value:value?.name||value?.label||'').map(value=>value.trim());
+  return [...new Set(names.filter(value=>value&&!/^(manual|other|none|no device)$/i.test(value)&&!/(?:\bobs\b|\bchrome\b|\bserver\b|\bdesktop\b|recording|heart.?rate.?onstream|pulsoid)/i.test(value)))];
+}
 export function sessionOutcome(record,type='session') {
   if(type==='body_exploration')return {label:'Body exploration',tone:'neutral'};
   const marked=Array.isArray(record.subjective_near_climax_episodes)?record.subjective_near_climax_episodes:[];
@@ -21,7 +25,7 @@ export function recordedDevices(record,evidence={}) {
   if(evidence.emg||record.live_capture_import?.emg_attached===true||record.capture_digest?.emg_attached===true)devices.push('EMG');
   if(evidence.bp)devices.push('BP cuff');
   if(evidence.howl)devices.push('Howl');
-  return devices;
+  return [...new Set([...devices,...recordedEquipment(record)])];
 }
 
 export function videoRecordSummary(record, type = 'session') {
@@ -38,7 +42,7 @@ export function videoRecordSummary(record, type = 'session') {
     title: record.title || record.exploration_type || (type === 'body_exploration' ? 'Body exploration' : 'Sexual session'),
     duration: videoRecordDuration(record) || 'Duration not recorded',
     events, episodes, videos,
-    devices:snapshot?.devices||recordedDevices(record),
+    devices:[...new Set([...(snapshot?.devices||recordedDevices(record)),...recordedEquipment(record)])],
     heartRate:hr,
     pressure:snapshot?.pelvic_pressure||null,
     outcome:snapshot?.outcome||sessionOutcome(record,type),

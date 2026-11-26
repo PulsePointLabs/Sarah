@@ -33,5 +33,6 @@ test('outcome badges use explicit records rather than missing flags or AI likeli
   assert.equal(sessionOutcome({climax_duration:12,no_climax:1}).label,'Outcome needs review');
   assert.equal(sessionOutcome({ai_near_climax_events:[{}]}).label,'Outcome not logged');
   assert.deepEqual(recordedDevices({civet_enabled:true,emg_enabled:true,capture_source:'obs'}),[]);
+  assert.deepEqual(recordedDevices({methods:['Manual','TENS','OBS recording','Foley Catheter']}),['TENS','Foley Catheter']);
   for(const flag of [0,false,'0','false',null,undefined])assert.equal(recordFlag(flag),false);
 });

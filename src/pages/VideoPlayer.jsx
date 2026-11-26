@@ -21,6 +21,7 @@ const RECORD_PICKER_FIELDS = [
   "review_event_count", "review_episode_count", "linked_local_videos",
   "video_file", "video_url", "capture_video_filename", "media_videos", "video_link",
   "review_snapshot", "min_hr", "climax_offset_s", "climax_duration", "hr_source", "hr_source_label",
+  "methods", "devices",
 ];
 
 let snapshotEndpointAvailable=true;
