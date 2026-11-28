@@ -1,3 +1,4 @@
+import MonitorTrendChart from './MonitorTrendChart.jsx';
 import DocumentChartContainer,{DocumentChartTooltip} from './DocumentChartContainer.jsx';
 import CivetCard from "./CivetCard.jsx";
 import {useOverlayCardSetting,VideoOverlayPreferenceScope} from './VideoOverlayPreferences.jsx';
@@ -107,6 +108,8 @@ function TrendChart({ readable = false, rows, lines, playheadS, xDomain, onSeek,
   const overlay=useContext(VideoOverlayPreferenceScope);
   if(overlay)lines=lines.map(line=>({...line,color:({hr:'#34e37e',rmssd:'#ffd43b',sdnn:'#38c8ff'})[line.key]||line.color}));
   const safePlayheadS = numberOrNull(playheadS);
+  if(overlay&&!rightAxis)return <div className={`${compact?"min-h-0 flex-1":"h-40"} w-full`}><MonitorTrendChart rows={rows} lines={lines.filter(line=>line.key!=='smoothed')} xDomain={xDomain} playheadS={playheadS} onSeek={onSeek} phaseBands={phaseBands} subjectiveEpisodes={subjectiveEpisodes} onEpisodeEdit={onEpisodeEdit} onEpisodeEditStart={onEpisodeEditStart} onEpisodePreview={onEpisodePreview}/></div>;
+
   return (
     <div className={`${compact ? "min-h-0 flex-1" : "h-40"} w-full`}>
       <DocumentChartContainer>
@@ -189,6 +192,10 @@ function TrendChart({ readable = false, rows, lines, playheadS, xDomain, onSeek,
       </DocumentChartContainer>
     </div>
   );
+}
+
+function SavedSensorState({label,state}){
+  return <div className="saved-sensor-state" role={state?.error?'alert':'status'}><b>{state?.loading?`Loading ${label.toLowerCase()}…`:state?.error?`${label} could not load`:`No ${label.toLowerCase()} saved for this record`}</b>{state?.error&&<p>{state.error}</p>}{!state?.loading&&state?.retry&&<button onClick={state.retry}>Retry {label}</button>}</div>;
 }
 
 export default function VideoSyncPhysiologySidebar({
@@ -289,7 +296,10 @@ export default function VideoSyncPhysiologySidebar({
   );
 
   return (
-    <VideoTelemetryOverlays controller={overlays} resizable={resizable} dashboard={dashboard}>
+    <VideoTelemetryOverlays controller={overlays} resizable={resizable} dashboard={dashboard} overlayEntries={[
+      {id:'civet',label:'Pelvic response',child:civet?.rows?.length>0?<CivetCard rows={civet.rows} analysis={civet.analysis} sessionId={civet.sessionId} markers={[{t:phaseSession?.climax_offset_s,label:"Manual climax"}]} playheadS={playheadS} onSeek={onSeek} onPlay={onPlay} compact windowSeconds={zoomWindow}/>:<SavedSensorState label="Pressure" state={civet}/>},
+      {id:'howl',label:'Howl timeline',child:howl?.rows?.length>0?<HowlTimelineCard rows={howl.rows} error={howl.error} onRetry={howl.retry} compact playheadS={playheadS} xDomain={safeDomain} onSeek={onSeek}/>:<SavedSensorState label="Howl" state={howl}/>},
+    ]}>
     <section className={`${compact ? "flex h-full min-h-0 flex-col gap-1 overflow-hidden p-2" : "space-y-3 p-3"} rounded-2xl border border-primary/15 bg-gradient-to-b from-primary/[0.055] via-card to-card shadow-sm`}>
       {(!compact || !resizable) && !dashboard && <div className="flex shrink-0 items-start justify-between gap-3">
         <div>
@@ -432,8 +442,8 @@ export default function VideoSyncPhysiologySidebar({
           {phaseSession && <button type="button" aria-pressed={showPhaseBands} onClick={() => setShowPhaseBands(!showPhaseBands)}
             className="text-[8px] text-primary">Phase bands {showPhaseBands ? "on" : "off"}</button>}
           <div className="flex gap-2 text-[8px]">
-            <span className="text-primary">HR</span>
-            <span className="text-pink-500">Smoothed</span>
+            <span className="text-primary">HR{overlays&&hr!=null?` ${Math.round(hr)} bpm`:""}</span>
+            {!overlays&&<span className="text-pink-500">Smoothed</span>}
             <span className="text-slate-500">Baseline</span>
           </div>
         </div>
@@ -461,8 +471,8 @@ export default function VideoSyncPhysiologySidebar({
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Autonomic Trend</p>
             <div className="flex gap-2 text-[8px]">
-              <span className="text-teal-500">RMSSD</span>
-              <span className="text-violet-500">SDNN</span>
+              <span className="text-teal-500">RMSSD{overlays?` ${rmssd?.toFixed(1)??"—"}`:""}</span>
+              <span className="text-violet-500">SDNN{overlays?` ${sdnn?.toFixed(1)??"—"}`:""}</span>
             </div>
           </div>
           <TrendChart readable={resizable}

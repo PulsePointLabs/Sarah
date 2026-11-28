@@ -1,18 +1,8 @@
-import {tileTelemetry} from './telemetryTiles.js';
 const EPS = 0.00001;
-// Projection is disposable: adapting a video viewport must never rewrite the
-// user's larger-screen geometry. Pack only when fitted boxes no longer fit.
+// Floating overlays stay floating. A narrower viewport only constrains bounds;
+// collisions must never turn video review into a full-screen tiled dashboard.
 export function projectOverlayLayout(boxes,width,height){
-  const fitted=Object.fromEntries(Object.entries(boxes).map(([id,box])=>[id,fitOverlayBounds(id,box,width,height)]));
-  if(!(width>0&&height>0))return fitted;
-  const entries=Object.entries(fitted);
-  if(!entries.some(([id,box],i)=>entries.slice(i+1).some(([,other])=>meaningfulOverlayOverlap(box,other,{width,height}))))return fitted;
-  const placed={};
-  for(const [id,box]of entries){const next=place(box,placed);if(!next){
-    const tiles=tileTelemetry(entries.map(([key,b])=>({id:key,kind:key.startsWith('metric-')?'metric':'chart',weight:key.startsWith('metric-')?.5:1,box:b})),width,height);
-    return Object.fromEntries(tiles.map(t=>[t.id,{...t.box,x:(t.x+3)/width,y:(t.y+3)/height,w:Math.max(1,t.width-6)/width,h:Math.max(1,t.height-6)/height}]));
-  }placed[id]=next;}
-  return placed;
+  return Object.fromEntries(Object.entries(boxes).map(([id,box])=>[id,fitOverlayBounds(id,box,width,height)]));
 }
 export const OVERLAY_GRID_PX=24;
 export function snapOverlayBox(id,box,width,height,{enabled=true,mode='move'}={}) {
@@ -22,8 +12,8 @@ export function snapOverlayBox(id,box,width,height,{enabled=true,mode='move'}={}
   let next={...fitted};
   if(mode.includes('resize')){
     const min=fitOverlayBounds(id,{...box,w:0,h:0},width,height);
-    next.w=Math.max(Math.ceil(min.w*width/OVERLAY_GRID_PX)*OVERLAY_GRID_PX/width,snap(next.w,width));
-    next.h=Math.max(Math.ceil(min.h*height/OVERLAY_GRID_PX)*OVERLAY_GRID_PX/height,snap(next.h,height));
+    next.w=Math.max(min.w,snap(next.w,width));
+    next.h=Math.max(min.h,snap(next.h,height));
   }
   if(mode.includes('move')){next.x=snap(next.x,width);next.y=snap(next.y,height);}
   return fitOverlayBounds(id,{...next,w:Math.min(1,next.w),h:Math.min(1,next.h)},width,height);

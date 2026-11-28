@@ -21,7 +21,7 @@ export default function StackedVideoViews({ master, secondary, masterRef, second
         <video ref={index===0?masterRef:el=>{secondaryRefs.current[feed.key]=el;}} src={feed.src}
           muted={index!==0} playsInline preload="auto" className="h-full w-full object-contain"
           style={{transform:`translate(${view.x}%, ${view.y}%) scale(${view.zoom})`,transformOrigin:'center'}}
-          onLoadedMetadata={index===0?undefined:()=>onReady(feed.key)} onClick={event=>{focusPanel(event,feed.key);onPlaybackClick?.();}} />
+          onLoadedMetadata={index===0?undefined:()=>onReady(feed.key)} onClick={event=>{focusPanel(event,feed.key);onPlaybackClick?.(event);}} />
         <VisualVideoOverlay annotation={annotation} frameTimeS={frameTimeS} feedKey={feed.key} camera={{key:feed.key,path:feed.localPath,fingerprint:feed.fingerprint,source_name:feed.fileName||feed.label||feed.key}} view={view}/>
         {!cleanVideo && <button type="button" onClick={event=>focusPanel(event,feed.key)} className="absolute left-2 top-2 rounded bg-black/80 px-2 py-1 text-sm text-white">
           {feed.label} · {index===0?'Master':'Second angle'}{selected===feed.key?' · Selected':''}

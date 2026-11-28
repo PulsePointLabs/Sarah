@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { episodeBoundaryTime } from "../lib/subjectiveNearClimax.js";
 import { episodeClock } from "../lib/episodeReviewContext.js";
 
-export default function EpisodeBoundaryHandle({ x1, y1, y2, stroke, episode, boundary, domain, onPreview, onCommit, onStart }) {
+export default function EpisodeBoundaryHandle({ x1, y1, y2, stroke, episode, boundary, domain, onPreview, onCommit, onStart,plotWidth }) {
   const drag = useRef(null);
   const label = `${episode.kind === "climax" ? "Climax" : "Near climax"} ${boundary === "start_s" ? "start" : "end"}`;
   const move = (event) => {
@@ -21,7 +21,7 @@ export default function EpisodeBoundaryHandle({ x1, y1, y2, stroke, episode, bou
       event.preventDefault(); event.stopPropagation();
       const svg = event.currentTarget.ownerSVGElement;
       const matrix = svg.getScreenCTM()?.inverse();
-      const width = svg.querySelector(".recharts-cartesian-grid")?.getBBox().width;
+      const width = plotWidth || svg.querySelector(".recharts-cartesian-grid")?.getBBox().width;
       if (!matrix || !width) return;
       drag.current = { matrix, width, x: new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix).x, time: episode[boundary] };
       event.currentTarget.setPointerCapture(event.pointerId);

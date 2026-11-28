@@ -29,7 +29,7 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   const resized=await overlay.boundingBox();assert.ok(resized.width-moved.width>90);assert.ok(resized.height-moved.height>70);
   await overlay.focus(); await page.keyboard.press('+');
   assert.equal(await overlay.locator('.video-overlay-content').evaluate(e=>getComputedStyle(e).opacity),'0.85');
-  const chart=overlay.locator('.recharts-wrapper');const chartBox=await chart.boundingBox();
+  const chart=overlay.locator('.monitor-trend-chart');const chartBox=await chart.boundingBox();
   await page.mouse.click(chartBox.x+chartBox.width*.65,chartBox.y+chartBox.height*.5);
   await page.waitForTimeout(300);
   assert.ok(await page.locator('[data-camera] video').first().evaluate(e=>e.currentTime)>1,'overlay chart click seeks the master');
@@ -39,8 +39,9 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   const fontAfter=await metric.locator('.monitor-metric-value').evaluate(e=>parseFloat(getComputedStyle(e).fontSize));
   assert.ok(fontAfter>fontBefore,'metric text grows with its card');
   assert.equal(await metric.locator('.telemetry-metric-card > p').last().isVisible(),false,'source hidden');
+  const area=await page.locator('.video-overlay-layer').boundingBox();
   const rects=await page.locator('[data-video-overlay]').evaluateAll(es=>es.map(e=>e.getBoundingClientRect().toJSON()));
-  for(let i=0;i<rects.length;i++)for(let j=i+1;j<rects.length;j++) {const a=rects[i],b=rects[j];const x=Math.min(a.right,b.right)-Math.max(a.left,b.left),y=Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top);assert.ok(x<=24||y<=24||(x*y<=Math.min(a.width*a.height,b.width*b.height)*.04&&Math.min(x,y)<=48),'only small edge overlap is tolerated');}
+  for(const box of rects)assert.ok(box.left>=area.x-1&&box.top>=area.y-1&&box.right<=area.x+area.width+1&&box.bottom<=area.y+area.height+1,'floating overlaps are allowed but every card stays within the video');
   const saved=await page.evaluate(()=>localStorage.getItem('sarah.videoSync.overlays.v1'));
   await open();await overlay.waitFor();
   assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('sarah.videoSync.overlays.v1'))),JSON.parse(saved),'layout survives reload and video loading');
@@ -48,7 +49,7 @@ let pw;try{pw=require('playwright');}catch{pw=require(path.join(os.homedir(),'.c
   await popup.getByRole('button',{name:'Add overlays to video',exact:true}).click();
   await popup.getByRole('menuitemcheckbox',{name:'SDNN',exact:true}).click();
   await page.locator('[data-video-overlay=metric-sdnn]').waitFor();
-  assert.equal(await popup.locator('.recharts-wrapper').count()>0,true,'monitor charts remain');
+  assert.equal(await popup.locator('.monitor-trend-chart').count()>0,true,'monitor charts remain');
   await page.locator('[data-video-overlay=metric-sdnn]').focus(); await page.keyboard.press('Delete');
   assert.equal(await page.locator('[data-video-overlay=metric-sdnn]').count(),0);
   await popup.getByRole('button',{name:'Single window',exact:true}).click();await overlay.waitFor();

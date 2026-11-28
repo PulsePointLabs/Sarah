@@ -1,3 +1,4 @@
+import VideoReviewDisplayControls from './VideoReviewDisplayControls.jsx';
 import VideoEventContextCard from "./VideoEventContextCard.jsx";
 import {useOverlayCardSetting} from './VideoOverlayPreferences.jsx';
 import VisualEventMarkup,{VisualEventSummary,VisualVideoOverlay} from './VisualEventMarkup.jsx';
@@ -870,6 +871,7 @@ export default function VideoSyncPlayer({
   const [videoControlsHidden, setVideoControlsHidden] = useOverlayCardSetting('display.controlsHidden',false,true);
   const videoOnly = fullTelemetryView && videoControlsHidden && !telemetryWindow.target;
   const [telemetryFocus, setTelemetryFocus] = useState(false);
+  const reviewTap=useRef({at:0,count:0,x:0,y:0});
   const [monitorImmersive,setMonitorImmersive]=useState(false);
   const toggleMonitorImmersive=()=>{
     const popup=telemetryWindow.target;if(!popup)return;
@@ -2867,7 +2869,7 @@ export default function VideoSyncPlayer({
 
             <div className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black ${videoOnly ? "" : "rounded-xl border border-white/10"}`}>
               {videoOnly&&<button type="button" onClick={()=>setPlaybackControlsRevealed(value=>!value)} aria-pressed={playbackControlsRevealed} className="absolute bottom-2 right-2 z-50 rounded border border-white/30 bg-black/70 px-3 py-1 text-sm text-white">Playback controls</button>}
-              <StackedVideoViews annotation={events[activeEventIdx]?.visual_annotation} frameTimeS={playheadS} onPlaybackClick={()=>{if(videoOnly||telemetryFocus)setPlaybackControlsRevealed(value=>!value);}} cleanVideo={videoOnly} layout={cameraLayout} master={{...videoFeeds[activeFeedKey],key:activeFeedKey,label:videoFeeds[activeFeedKey]?.label || 'Master camera',src:videoFeeds[activeFeedKey]?.src || videoSrc}}
+              <StackedVideoViews annotation={events[activeEventIdx]?.visual_annotation} frameTimeS={playheadS} onPlaybackClick={event=>{const now=Date.now(),old=reviewTap.current,count=now-old.at<450&&Math.hypot(event.clientX-old.x,event.clientY-old.y)<36?old.count+1:1;reviewTap.current={at:now,count,x:event.clientX,y:event.clientY};if(count>=3){event.preventDefault();event.stopPropagation();reviewTap.current.count=0;setVideoControlsHidden(false);setTelemetryFocus(false);setPlaybackControlsRevealed(true);}else if(videoOnly||telemetryFocus)setPlaybackControlsRevealed(value=>!value);}} cleanVideo={videoOnly} layout={cameraLayout} master={{...videoFeeds[activeFeedKey],key:activeFeedKey,label:videoFeeds[activeFeedKey]?.label || 'Master camera',src:videoFeeds[activeFeedKey]?.src || videoSrc}}
                 secondary={secondAngleKey!==activeFeedKey?loadedFeeds.find(f=>f.key===secondAngleKey):null}
                 masterRef={videoRef} secondaryRefs={videoFeedRefs} views={feedViews} selected={selectedViewKey}
                 onSelect={selectView} onReady={handleSecondaryReady}
@@ -2939,6 +2941,8 @@ export default function VideoSyncPlayer({
               resizeTelemetrySidebar(e.key === "Home" ? telemetrySidebarLimits.min : e.key === "End" ? telemetrySidebarLimits.max
                 : telemetrySidebarWidth + (e.key === "ArrowLeft" ? 16 : -16));
             }} />}
+          <VideoReviewDisplayControls controller={telemetryOverlays} onRestore={()=>{setVideoControlsHidden(false);setTelemetryFocus(false);setPlaybackControlsRevealed(true);if(document.fullscreenElement)document.exitFullscreen?.().catch(()=>{});}} onExit={closeFullTelemetryView}/>
+          {telemetryWindow.target&&createPortal(<VideoReviewDisplayControls controller={telemetryOverlays} onRestore={()=>{setMonitorImmersive(false);if(telemetryWindow.target.document.fullscreenElement)telemetryWindow.target.document.exitFullscreen?.().catch(()=>{});}} onExit={telemetryWindow.close}/>,telemetryWindow.target.document.body)}
           {telemetryWindow.target ? createPortal(telemetryPanel, telemetryWindow.target.document.body) : <div className={`${videoOnly ? "hidden" : "contents"}`}>{telemetryPanel}</div>}
         </div>,
         document.body,

@@ -1,5 +1,6 @@
-import {useOverlayCardSetting} from './VideoOverlayPreferences.jsx';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import MonitorTrendChart from './MonitorTrendChart.jsx';
+import {useOverlayCardSetting,VideoOverlayPreferenceScope} from './VideoOverlayPreferences.jsx';
+import { useContext,useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { contractionSnapshot } from '../lib/civetSnapshot.js';
 import { civetAt } from '../lib/civet.js';
@@ -47,6 +48,7 @@ function Exports({sessionId,mode}) {
   return <div className="civet-export">{['samples','events','trains','analysis'].map(kind=><a key={kind} href={apiUrl(`/civet/session/${encodeURIComponent(sessionId)}/export?kind=${kind}&mode=${mode}`)}>Export {kind}{kind==='analysis'?' JSON':' CSV'}</a>)}</div>;
 }
 export default function CivetCard({rows=[],sample,playheadS,onSeek,onPlay,compact=false,statusText,analysis,sessionId,markers=[],windowSeconds=30}) {
+  const monitorScope=useContext(VideoOverlayPreferenceScope);
   const [open,setOpen]=useState(false),[portalRoot,setPortalRoot]=useState(null),[selectedTrain,setSelectedTrain]=useState(null);
   const [mode,setMode]=useOverlayCardSetting('civet.mode','reprocessed');
   const [layers,setLayers]=useOverlayCardSetting('civet.layers',{raw:false,filtered:true,tonic:true,phasic:false,events:true});
@@ -72,6 +74,7 @@ export default function CivetCard({rows=[],sample,playheadS,onSeek,onPlay,compac
   const seek=t=>onSeek?.(t);
   const summary=useMemo(()=>videoPressureSummary(displayRows,events,end),[displayRows,events,end]);
   const cardRows=useMemo(()=>summary.relative?displayRows.map(row=>({...row,pressure_kpa:(row.usable??row.calibration_valid)&&row.calibration?.id===summary.current?.calibration?.id?row.delta_kpa:null,filtered_kpa:(row.usable??row.calibration_valid)&&row.calibration?.id===summary.current?.calibration?.id?row.delta_kpa:null,tonic_kpa:row.tonic_kpa-(row.calibration?.baseline??0)})):displayRows,[displayRows,summary.relative,summary.current?.calibration?.id]);
+  const monitorRows=useMemo(()=>cardRows.map(row=>({...row,filtered_kpa:row.filtered_kpa??row.pressure_kpa})),[cardRows]);
   const cardEvents=useMemo(()=>summary.relative?events.filter(event=>event.calibration?.id===summary.current?.calibration?.id).map(event=>({...event,peak_pressure_kpa:event.peak_pressure_kpa-(event.calibration?.baseline??0),raw_peak_pressure_kpa:(event.raw_peak_pressure_kpa??event.peak_pressure_kpa)-(event.calibration?.baseline??0),tonic_kpa:event.tonic_kpa-(event.calibration?.baseline??0)})):events,[events,summary.relative,summary.current?.calibration?.id]);
   const visual=civetLiveColor({current:summary.relative?summary.value:null,sample:current,held:summary.held,rhythmic:summary.snapshot.train.length>=3});
   const recentBurst=summary.snapshot.train;
@@ -83,7 +86,7 @@ export default function CivetCard({rows=[],sample,playheadS,onSeek,onPlay,compac
     <div className="pressure-video-values">{view==='burst'?<><div><strong>{summary.snapshot.train.length||'—'}<small> peaks</small></strong><span>Resolved · 10s</span></div><div><strong>{fmt(recentBurst.length?recentBurst.at(-1).end-recentBurst[0].onset:null,1)}<small> s</small></strong><span>Recent burst</span></div><div><strong>{fmt(summary.snapshot.spacing,2)}<small> s</small></strong><span>Typical spacing</span></div></>:<><div><strong>{fmt(summary.value,1)}<small> kPa</small></strong><span>{summary.relative?'Above rest':'Measured pressure'}</span></div>{view!=='waveform'&&<><div><strong>{fmt(summary.average,1)}</strong><span>Average · 30s</span></div><div><strong>{fmt(summary.peak,1)}</strong><span>Max · 30s</span></div></>}</>}</div>
     {!current&&<div className="civet-state">{statusText||'No current pressure sample'}</div>}
     <div className="civet-rhythm" aria-label="Rolling contraction snapshot"><span>{summary.held?'Current hold':'Last pulse'} <b>{fmt(summary.duration,2)}s</b></span><span>Spacing <b>{fmt(summary.snapshot.spacing,2)}s</b></span><span>Repeated <b>{summary.snapshot.train.length||'—'} / 10s</b></span></div>
-    <CivetPlot rows={cardRows} events={cardEvents} start={cardStart} end={Math.max(end,cardStart+.1)} layers={{filtered:true,events:true}} domain={summary.range} accent={visual.accent} onSeek={onSeek} markers={markers} playheadS={end}/>
+    {monitorScope?<MonitorTrendChart rows={monitorRows} lines={[{key:'filtered_kpa',label:summary.relative?'Pressure above rest (kPa)':'Pressure (kPa)',color:'#55e4ce',decimals:2}]} xDomain={[cardStart,Math.max(end,cardStart+.1)]} fixedBounds={summary.range} minSpan={1} gapSeconds={.35} breakBefore={(previous,current)=>civetTraceBreak(previous,current)} fill onSeek={onSeek} playheadS={end} markers={[...markers,...cardEvents.map(event=>({t:event.peak,label:`Contraction at ${fmt(event.peak,1)}s`}))]}/>:<CivetPlot rows={cardRows} events={cardEvents} start={cardStart} end={Math.max(end,cardStart+.1)} layers={{filtered:true,events:true}} domain={summary.range} accent={visual.accent} onSeek={onSeek} markers={markers} playheadS={end}/>}
     <footer><span>{Math.round(end-cardStart)}s · {summary.relative?'above recorded rest':'measured kPa'}</span><span>{view==='burst'?'Latest resolved burst':summary.relative?'Reference ready':'Reference uncertain'}</span></footer>
     {open&&createPortal(<div className="civet-inspector-backdrop"><section role="dialog" aria-modal="true" aria-label="CIVET contraction analysis" className="civet-inspector" onKeyDown={e=>{if(e.key==='Escape')setOpen(false);}}>
       <header><h2>Pelvic pressure · Review</h2><button autoFocus onClick={()=>setOpen(false)}>Close</button></header>

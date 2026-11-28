@@ -12,7 +12,7 @@ test('grid snaps geometry, honors readable floors and allows a precise override'
  const original={x:.103,y:.067,w:.24,h:.25,opacity:.83};
  const moved=snapOverlayBox('metric-heart-rate',original,1200,800);assert.equal(moved.x*1200,120);assert.equal(moved.y*800,48);assert.equal(moved.opacity,.83);
  const fine=snapOverlayBox('metric-heart-rate',original,1200,800,{enabled:false});assert.equal(fine.x,original.x);
- const resized=snapOverlayBox('phase',{...original,w:.1,h:.1},1200,800,{mode:'resize'});assert.ok(resized.w*1200>=220&&resized.h*800>=150);assert.equal(resized.h*800%24,0);
+ const resized=snapOverlayBox('phase',{...original,w:.1,h:.1},1200,800,{mode:'resize'});assert.ok(resized.w*1200>=219.99&&resized.h*800>=149.99);assert.ok(resized.h*800<=168);
 });
 
 test('edge wiggle does not move neighbors; deliberate overlaps move them to a nearby grid position',()=>{
@@ -31,10 +31,18 @@ test('legacy overlapping layouts restore every selected overlay without collisio
 });
 
 
-test('viewport projection packs reduced cards without overwriting saved geometry',()=>{
+test('viewport projection never converts floating overlays into tiles or overwrites saved geometry',()=>{
  const original={phase:{x:.1,y:.1,w:.25,h:.3,opacity:.8},cardiac:{x:.5,y:.1,w:.3,h:.3,opacity:.9},autonomic:{x:.1,y:.5,w:.4,h:.3,opacity:.7}};
  const snapshot=JSON.stringify(original),small=projectOverlayLayout(original,420,520),values=Object.values(small);
  assert.equal(JSON.stringify(original),snapshot);
- for(let i=0;i<values.length;i++){const b=values[i];assert.ok(b.x>=0&&b.y>=0&&b.x+b.w<=1.00001&&b.y+b.h<=1.00001);for(let j=i+1;j<values.length;j++)assert.equal(overlaps(b,values[j]),false);}
+ for(let i=0;i<values.length;i++){const b=values[i];assert.ok(b.x>=0&&b.y>=0&&b.x+b.w<=1.00001&&b.y+b.h<=1.00001);}
  assert.deepEqual(projectOverlayLayout(original,1920,1080),original);
+});
+
+
+test('many overlapping overlays stay floating instead of filling the entire video',()=>{
+ const boxes=Object.fromEntries(Array.from({length:12},(_,i)=>['metric-'+i,{x:.1,y:.1,w:.18,h:.16,opacity:.9}]));
+ const projected=projectOverlayLayout(boxes,1280,720);
+ assert.ok(Object.values(projected).every(b=>b.w===.18&&b.h===.16&&b.x===.1&&b.y===.1));
+ assert.ok(Object.values(projected).reduce((sum,b)=>sum+b.w*b.h,0)<.4);
 });

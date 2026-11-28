@@ -18,11 +18,11 @@ function clean(value) {
 }
 const OPTIONS='sarah.videoSync.overlayOptions.v1';
 const restore=()=>{try{return clean(JSON.parse(localStorage.getItem(STORAGE)));}catch{return {};}};
-const readOptions=()=>{try{return {snap:JSON.parse(localStorage.getItem(OPTIONS))?.snap!==false};}catch{return {snap:true};}};
+const readOptions=()=>{try{const value=JSON.parse(localStorage.getItem(OPTIONS));return {snap:value?.snap!==false,hidden:value?.hidden===true};}catch{return {snap:true,hidden:false};}};
 export function useVideoTelemetryOverlays() {
   const [preferred,setPreferred]=useState(restore),profile=useRef(preferred);
   const [options,setOptions]=useState(readOptions),optionsRef=useRef(options);optionsRef.current=options;
-  const [draft,setDraft]=useState(null),[activeId,setActiveId]=useState('');
+  const [draft,setDraft]=useState(null),[activeId,setActiveId]=useState(''),[editing,setEditing]=useState(false);
   const [target,setTarget]=useState(null),[pickerTarget,setPickerTarget]=useState(null);
   const [size,setSize]=useState({width:0,height:0}),sizeRef=useRef(size);sizeRef.current=size;
   const display=(source=profile.current)=>projectOverlayLayout(source,sizeRef.current.width,sizeRef.current.height);
@@ -54,13 +54,15 @@ export function useVideoTelemetryOverlays() {
     const next={...profile.current};if(next[id])delete next[id];
     else{
       const offset=Object.keys(next).length%6*.045;
-      const candidate=constrain(id,{x:.03+offset,y:.03+offset,w:id.startsWith('metric-')?.24:.48,h:id.startsWith('metric-')?.25:.4,opacity:.9},{mode:'move-resize'});
+      const candidate=constrain(id,{x:.03+offset,y:.03+offset,w:id.startsWith('metric-')?.16:.28,h:id.startsWith('metric-')?.16:.25,opacity:.9},{mode:'move-resize'});
       next[id]=constrain(id,place(candidate,display())||candidate,{mode:'move-resize'});setActiveId(id);
     }
     save(next);
   };
   const setSnap=value=>{const next={...optionsRef.current,snap:value};optionsRef.current=next;setOptions(next);try{localStorage.setItem(OPTIONS,JSON.stringify(next));}catch{}};
-  return {boxes:draft||display(preferred),target,setTarget,pickerTarget,setPickerTarget,update,preview,cancelPreview:()=>setDraft(null),activeId,setActiveId,toggle,options,setSnap,arranging:Boolean(draft),gridSize:OVERLAY_GRID_PX};
+  const setVisible=value=>{const next={...optionsRef.current,hidden:!value};optionsRef.current=next;setOptions(next);try{localStorage.setItem(OPTIONS,JSON.stringify(next));}catch{}};
+  const resetPositions=()=>save(Object.fromEntries(Object.entries(profile.current).map(([id,box],i)=>[id,{...box,w:id.startsWith('metric-')?.16:.27,h:id.startsWith('metric-')?.15:.22,x:.015+(i%3)*.345,y:.02+Math.floor(i/3)*.235}])));
+  return {boxes:draft||display(preferred),editing,setEditing,setVisible,resetPositions,target,setTarget,pickerTarget,setPickerTarget,update,preview,cancelPreview:()=>setDraft(null),activeId,setActiveId,toggle,options,setSnap,arranging:Boolean(draft),gridSize:OVERLAY_GRID_PX};
 }
 
 const palette=id=>id==='cardiac'||id==='metric-heart-rate'?['#34e37e','52,227,126']:id==='autonomic'||id==='metric-rmssd'?['#ffd43b','255,212,59']:id==='metric-sdnn'?['#38c8ff','56,200,255']:id==='metric-blood-pressure'?['#ff6b8b','255,107,139']:id==='civet'?['#55e4ce','85,228,206']:id==='howl'?['#b794ff','183,148,255']:id==='phase'?['#8ca3b8','140,163,184']:['#8ca3b8','140,163,184'];
@@ -91,6 +93,7 @@ function FloatingTelemetry({ id, label, children, controller }) {
       if(event.target.closest('input,select,textarea,[role=slider]'))return;
       event.preventDefault();event.stopPropagation();
       const {controller,savedBox}=latest.current;
+      if(!controller.editing)return;
       if(!wheelGesture.current)wheelGesture.current={box:savedBox,dx:0,dy:0,mode:event.ctrlKey?'resize':'move'};
       const g=wheelGesture.current,bounds=controller.target.getBoundingClientRect(),scale=event.deltaMode===1?16:1;
       g.dx+=event.deltaX*scale;g.dy+=event.deltaY*scale;
@@ -103,6 +106,7 @@ function FloatingTelemetry({ id, label, children, controller }) {
   },[id]);
   const start = (event, mode) => {
     if (event.button !== 0) return;
+    controller.setEditing(true);
     event.preventDefault(); event.stopPropagation();
     suppressClick.current = true;
     controller.setActiveId(id);
@@ -165,15 +169,32 @@ function FloatingTelemetry({ id, label, children, controller }) {
     }} {...pointerProps}
     onClickCapture={event => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false; } }}
     style={{ left: `${box.x*100}%`, top: `${box.y*100}%`, width: `${box.w*100}%`, height: `${box.h*100}%`, '--overlay-accent':accent,'--overlay-accent-rgb':rgb,zIndex: preview||controller.activeId===id ? 100 : 1 }}>
-    <header className="video-overlay-handlebar"><button type="button" aria-label={`Move ${label} overlay`} onPointerDown={event=>start(event,'move')} onKeyDown={event=>keyboard(event,'move')} {...pointerProps}>⠿ {cardLabel(id)}</button><button type="button" aria-label={`Expand ${label} overlay`} onClick={()=>setExpanded(true)}>⤢</button></header>
+    <header className="video-overlay-handlebar"><button type="button" aria-label={`Move ${label} overlay`} onClick={()=>{controller.setEditing(true);controller.setActiveId(id);}} onPointerDown={event=>start(event,'move')} onKeyDown={event=>keyboard(event,'move')} {...pointerProps}>⠿ {cardLabel(id)}</button><button type="button" aria-label={`Expand ${label} overlay`} onClick={()=>setExpanded(true)}>⤢</button></header>
     <VideoOverlayPreferenceScope.Provider value={id}><div className="video-overlay-content monitor-tile-body" style={{ opacity: box.opacity }}>{children}</div>
     {expanded&&<OverlayBreakout id={id} label={label} target={controller.target} accent={accent} rgb={rgb} onClose={()=>setExpanded(false)}>{children}</OverlayBreakout>}</VideoOverlayPreferenceScope.Provider>
     <button type="button" className="video-overlay-resize" aria-label={`Resize ${label} overlay`}
       onPointerDown={event => start(event, 'resize')} onKeyDown={event => keyboard(event,'resize')} {...pointerProps}>◢</button>
   </section>;
 }
+function OverlayArrangeTools({controller,entries}){
+  const [placing,setPlacing]=useState(false);
+  const id=controller.boxes[controller.activeId]?controller.activeId:Object.keys(controller.boxes)[0],box=controller.boxes[id];
+  if(!box)return null;
+  const resize=(w,h)=>controller.update(id,{w:box.w*w,h:box.h*h},{mode:'resize',snap:false});
+  const move=(x,y)=>{const r=controller.target.getBoundingClientRect();controller.update(id,{x:box.x+x/r.width,y:box.y+y/r.height},{mode:'move'});};
+  return <>
+    {placing&&<div className="overlay-place-surface" onPointerDown={event=>{event.preventDefault();event.stopPropagation();const r=controller.target.getBoundingClientRect();controller.update(id,{x:(event.clientX-r.left)/r.width-box.w/2,y:(event.clientY-r.top)/r.height-box.h/2},{mode:'move'});setPlacing(false);}}><span>Click where this card should go</span></div>}
+    <div className="overlay-arrange-tools" role="toolbar" aria-label="Arrange video overlays" onKeyDown={event=>event.stopPropagation()}>
+      <select aria-label="Overlay to arrange" value={id} onChange={event=>controller.setActiveId(event.target.value)}>{Object.keys(controller.boxes).map(key=><option key={key} value={key}>{entries.find(entry=>entry.id===key)?.label||cardLabel(key)}</option>)}</select>
+      <button aria-pressed={placing} onClick={()=>setPlacing(!placing)}>Place</button>
+      <button aria-label="Move overlay left" onClick={()=>move(-24,0)}>←</button><button aria-label="Move overlay up" onClick={()=>move(0,-24)}>↑</button><button aria-label="Move overlay down" onClick={()=>move(0,24)}>↓</button><button aria-label="Move overlay right" onClick={()=>move(24,0)}>→</button>
+      <button onClick={()=>resize(.8,.8)}>Smaller</button><button onClick={()=>resize(1.2,1.2)}>Bigger</button><button onClick={()=>resize(.8,1)}>Narrower</button><button onClick={()=>resize(1,.8)}>Shorter</button>
+      <button onClick={()=>controller.setEditing(false)}>Done</button>
+    </div>
+  </>;
+}
 // Reuse the actual React cards and their callbacks, not screenshots or DOM copies.
-export default function VideoTelemetryOverlays({ children, controller, resizable, dashboard }) {
+export default function VideoTelemetryOverlays({ children, controller, resizable, dashboard, overlayEntries=[] }) {
   if (!controller) return <ResizableVideoTelemetry enabled={resizable} dashboard={dashboard}>{children}</ResizableVideoTelemetry>;
   const items = Children.toArray(children.props.children);
   const sections = items.filter(child => isValidElement(child) && child.props['data-sidebar-section']);
@@ -182,6 +203,7 @@ export default function VideoTelemetryOverlays({ children, controller, resizable
   if (metrics) Children.toArray(metrics.props.children).filter(isValidElement).forEach(child => {
     if (child.props.label) entries.push({ id: `metric-${child.props.label.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-')}`, label: child.props.label, child });
   });
+  for(const entry of overlayEntries){const index=entries.findIndex(item=>item.id===entry.id);if(index>=0)entries[index]=entry;else entries.push(entry);}
   const missing = Object.keys(controller.boxes).filter(id => !entries.some(entry => entry.id === id));
   const picker = <TelemetryPickerMenu key="overlay-picker" label="Add overlays to video" summary={`${Object.keys(controller.boxes).length} selected`}
     help="Drag a header to move, or a corner to resize. Snap uses a 24 px grid; hold Alt for fine placement. Neighbors stay still while dragging and move on a deliberate overlapping drop. Layout and card options are shared across sessions."
@@ -189,10 +211,11 @@ export default function VideoTelemetryOverlays({ children, controller, resizable
       ...missing.map(id=>({id,label:`${id} · no data (remove)`,checked:true,onChange:()=>controller.toggle(id)}))]} />;
   return <><ResizableVideoTelemetry enabled={resizable} dashboard={dashboard}>{children}</ResizableVideoTelemetry>
     {controller.pickerTarget && createPortal(picker, controller.pickerTarget)}
-    {controller.target && createPortal(<>
+    {controller.target && !controller.options.hidden && createPortal(<>
       {controller.arranging&&controller.options.snap&&<div className="video-overlay-snap-grid" aria-hidden="true" style={{backgroundSize:`${controller.gridSize}px ${controller.gridSize}px`}}/>}
       {entries.filter(entry=>controller.boxes[entry.id]).map(({id,label,child})=><FloatingTelemetry key={id} id={id} label={label} controller={controller}>{child}</FloatingTelemetry>)}
       {missing.map(id=><FloatingTelemetry key={id} id={id} label={cardLabel(id)} controller={controller}><div className="video-overlay-empty"><strong>{cardLabel(id)}</strong><p>No data in this view.</p><p>Your saved layout is kept.</p></div></FloatingTelemetry>)}
+      {controller.editing&&<OverlayArrangeTools controller={controller} entries={entries}/>}
     </>,controller.target)}
   </>;
 }
