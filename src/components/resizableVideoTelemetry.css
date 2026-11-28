@@ -39,8 +39,8 @@
 .single-window-telemetry .video-overlay-picker summary { padding:5px 8px; font-size:11px; }
 .single-window-telemetry > div:first-child { height:auto; min-height:26px; flex-wrap:wrap; gap:4px; }
 .single-window-telemetry > div:first-child :is(span,button) { font-size:11px; }
-.video-only-controls { position:absolute; left:8px; right:8px; bottom:8px; z-index:60; opacity:0; pointer-events:none; transition:opacity 120ms; }
-.video-only-controls-revealed,.video-only-controls:focus-within { opacity:1; pointer-events:auto; }
+.video-only-controls { position:absolute; left:8px; right:8px; bottom:8px; z-index:60; opacity:0; visibility:hidden; pointer-events:none; transition:opacity 120ms; }
+.video-only-controls-revealed,.video-only-controls:focus-within { opacity:1; visibility:visible; pointer-events:auto; }
 .video-resizable-content > section > details > .absolute { top:auto; bottom:0; max-height:calc(100% - 24px); }
 @container (min-width:145px) { .video-resizable-content .metric-full-label { display:inline; font-size:10px !important; } .video-resizable-content .metric-short-label { display:none; } }
 @container (max-width:70px) { .video-resizable-content > .grid > div > div svg { display:none; } }

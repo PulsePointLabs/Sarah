@@ -35,5 +35,5 @@ test('a dragged overlay owns its destination and displaces its neighbor without 
 });
 test('old tiny overlay layouts expand to readable bounds while staying on the video',()=>{
   const box=fitOverlayBounds('phase',{x:.9,y:.9,w:.1,h:.1},1280,720);
-  assert.ok(box.w*1280>=360);assert.ok(box.h*720>=300);assert.ok(box.x+box.w<=1);assert.ok(box.y+box.h<=1);
+  assert.ok(box.w*1280>=220);assert.ok(box.h*720>=150);assert.ok(box.x+box.w<=1);assert.ok(box.y+box.h<=1);
 });

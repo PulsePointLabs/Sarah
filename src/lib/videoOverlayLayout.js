@@ -1,4 +1,19 @@
+import {tileTelemetry} from './telemetryTiles.js';
 const EPS = 0.00001;
+// Projection is disposable: adapting a video viewport must never rewrite the
+// user's larger-screen geometry. Pack only when fitted boxes no longer fit.
+export function projectOverlayLayout(boxes,width,height){
+  const fitted=Object.fromEntries(Object.entries(boxes).map(([id,box])=>[id,fitOverlayBounds(id,box,width,height)]));
+  if(!(width>0&&height>0))return fitted;
+  const entries=Object.entries(fitted);
+  if(!entries.some(([id,box],i)=>entries.slice(i+1).some(([,other])=>meaningfulOverlayOverlap(box,other,{width,height}))))return fitted;
+  const placed={};
+  for(const [id,box]of entries){const next=place(box,placed);if(!next){
+    const tiles=tileTelemetry(entries.map(([key,b])=>({id:key,kind:key.startsWith('metric-')?'metric':'chart',weight:key.startsWith('metric-')?.5:1,box:b})),width,height);
+    return Object.fromEntries(tiles.map(t=>[t.id,{...t.box,x:(t.x+3)/width,y:(t.y+3)/height,w:Math.max(1,t.width-6)/width,h:Math.max(1,t.height-6)/height}]));
+  }placed[id]=next;}
+  return placed;
+}
 export const OVERLAY_GRID_PX=24;
 export function snapOverlayBox(id,box,width,height,{enabled=true,mode='move'}={}) {
   const fitted=fitOverlayBounds(id,box,width,height);
@@ -20,8 +35,8 @@ export function meaningfulOverlayOverlap(a,b,{width=1200,height=800,tolerancePx=
 export function fitOverlayBounds(id,box,width,height) {
   if(!(width>0&&height>0))return box;
   const metric=id.startsWith('metric-'),pressure=id==='civet';
-  const w=Math.min(1,Math.max(box.w,(metric?180:id==='phase'||pressure?360:320)/width));
-  const h=Math.min(1,Math.max(box.h,(metric?120:pressure?340:id==='phase'?340:250)/height));
+  const w=Math.min(1,Math.max(box.w,(metric?140:pressure?240:220)/width));
+  const h=Math.min(1,Math.max(box.h,(metric?100:pressure?170:150)/height));
   return {...box,w,h,x:Math.max(0,Math.min(1-w,box.x)),y:Math.max(0,Math.min(1-h,box.y))};
 }
 export const overlaps = (a, b) => a.x < b.x+b.w-EPS && a.x+a.w > b.x+EPS && a.y < b.y+b.h-EPS && a.y+a.h > b.y+EPS;

@@ -1,0 +1,78 @@
+/* Sarah Monitor: ink panels, readable numerics, channel identity, no page scroll. */
+.monitor-layout{--primary:148 76% 55%;--foreground:207 43% 93%;--muted-foreground:209 24% 64%;--border:211 45% 16%;display:flex;flex-direction:column;width:100%;height:100%;min-height:0;min-width:0;overflow:hidden;color:#e6eef5;background:#02060b}
+.monitor-layout-tools{display:flex;align-items:center;gap:6px;flex:none;padding:4px;font-size:14px}
+.monitor-layout-tools>button{border:1px solid #294052;border-radius:5px;padding:5px 9px;background:#0c1925}
+.monitor-layout-tools>button[aria-pressed=true]{color:#55e4ce;border-color:#55e4ce}
+.monitor-layout-viewport{flex:1;position:relative;min-height:0;min-width:0;overflow:hidden;isolation:isolate}
+.monitor-tile{position:absolute;box-sizing:border-box;border:1px solid #203343;border-radius:7px;background:linear-gradient(155deg,color-mix(in srgb,var(--monitor-accent) 7%,#07111a),#07111a 70%);display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;container-type:size;transition:none}
+.monitor-tile-heading{height:28px;flex:none;display:flex;align-items:center;gap:4px;padding:0 6px;border-bottom:1px solid #16283a;color:var(--monitor-accent)}
+.monitor-tile-heading:before{content:'';height:12px;width:3px;background:var(--monitor-accent);border-radius:2px;flex:none}
+.monitor-tile-heading>button{font-size:14px;line-height:1.1;padding:3px 2px;color:inherit}
+.monitor-tile-heading>button:first-child{flex:1;text-align:left;touch-action:none}
+.monitor-tile-heading>button:first-child:disabled{opacity:1;cursor:default}
+.monitor-tile-heading>button:not(:first-child){font-size:20px;min-width:26px}
+.monitor-tile-body{flex:1;min-height:0;min-width:0;container-type:size;display:flex;flex-direction:column;padding:4px 6px;box-sizing:border-box;overflow:hidden}
+.monitor-tile-body>*{height:100%!important;min-height:0!important;width:100%;box-sizing:border-box;background:transparent!important;border:0!important;padding:0!important;box-shadow:none!important;border-radius:0!important}
+.monitor-tile-body :is(p,span,b,button,summary,label){font-size:clamp(14px,2.5cqw,18px);line-height:1.18}
+.monitor-layout .monitor-tile-body :is(p,span,b,button,summary,label){font-size:clamp(14px,2.5cqw,18px)!important;line-height:1.18}
+.monitor-tile-body .recharts-cartesian-axis-tick text{font-size:12px;fill:#8ca3b8}
+.monitor-layout .monitor-tile-body .recharts-cartesian-axis-tick text{font-size:12px!important}
+.monitor-tile-body .recharts-cartesian-grid line{stroke:#13202e}
+.monitor-tile-body>[data-sidebar-section]>div:first-child{flex-wrap:wrap;gap:3px;margin-bottom:3px}
+.monitor-tile-body>[data-sidebar-section]>div:first-child>p:first-child{display:none}
+.monitor-tile-body>[data-sidebar-section]>div:first-child>div{margin-left:auto;flex-wrap:wrap}
+.monitor-tile-body .telemetry-metric-card{display:flex;flex-direction:column;justify-content:center;align-items:stretch;gap:2px}
+.monitor-tile-body .telemetry-metric-card>div:first-child{display:none}
+.monitor-tile-body .monitor-metric-value{font-size:clamp(32px,min(30cqw,50cqh),150px)!important;line-height:1;letter-spacing:-.04em;flex:1;display:flex;align-items:center;justify-content:center;margin:0;font-weight:600}
+.monitor-tile-body .monitor-metric-value>span{font-size:14px!important;letter-spacing:0;margin-left:4px}
+.monitor-layout .monitor-tile-body .monitor-metric-value{font-size:var(--monitor-value,48px)!important}
+@container(max-height:85px){.monitor-tile-body .telemetry-metric-card>p:not(.monitor-metric-value){display:none}.monitor-layout .monitor-tile-body .monitor-metric-value{font-size:clamp(28px,min(var(--monitor-value,48px),70cqh),100px)!important}}
+.monitor-tile-body .telemetry-metric-card>p:not(.monitor-metric-value){text-align:center;margin:0;background:#102521;border:1px solid #203f34;border-radius:4px;padding:3px}
+.monitor-tile-body .telemetry-metric-card>p:last-child{display:none}
+.monitor-tile[data-monitor-section="metric:Heart Rate"] .monitor-metric-value,.monitor-tile[data-monitor-section="metric:RMSSD"] .monitor-metric-value,.monitor-tile[data-monitor-section="metric:SDNN"] .monitor-metric-value{color:#34e37e;text-shadow:0 0 14px #34e37e30}
+.monitor-tile[data-monitor-section=autonomic] .text-teal-500{color:#ffd43b}.monitor-tile[data-monitor-section=autonomic] .text-violet-500{color:#38c8ff}
+.monitor-tile-body .video-phase-card{display:flex!important;flex-direction:column;gap:3px}
+.monitor-tile-body .video-phase-card>svg{flex:1;min-height:45px!important;height:100%;width:100%}
+.monitor-tile-body .video-phase-card>*{margin:0!important;flex-shrink:0}
+.monitor-tile-body .video-phase-card>div:first-child{display:flex;flex-wrap:wrap;gap:3px}
+.monitor-tile-body .video-phase-card h3,.monitor-tile-body .video-phase-card button{font-size:14px!important}
+.monitor-tile-body .video-phase-card .text-2xl{font-size:26px!important}
+.monitor-layout .monitor-tile-body .video-phase-card .text-sm{font-size:16px!important}
+.monitor-layout .monitor-tile-body .video-phase-card h3,.monitor-layout .monitor-tile-body .video-phase-card button{font-size:14px!important}
+.monitor-layout .monitor-tile-body .video-phase-card.video-phase-card :is(p,span,button){font-size:14px!important}
+.monitor-layout .monitor-tile-body .video-phase-card.video-phase-card .text-2xl{font-size:24px!important}
+.monitor-tile-body .video-phase-card>input{height:12px;flex:none}
+.monitor-tile-body .video-phase-details{font-size:14px}
+.monitor-tile-resize{position:absolute;right:0;bottom:0;z-index:4;width:36px;height:36px;font-size:23px;color:#55e4ce;background:linear-gradient(135deg,transparent 45%,#173d3f 45%);touch-action:none}
+.is-arranging .monitor-tile{touch-action:none}.is-arranging .monitor-tile-heading>button:first-child{cursor:grab}
+.monitor-tile.is-moving{z-index:100;opacity:.82;box-shadow:0 0 0 2px #55e4ce,0 12px 30px #000a;pointer-events:auto}
+.monitor-drop-target{position:absolute;z-index:90;box-sizing:border-box;border:2px dashed #55e4ce;border-radius:7px;background:#55e4ce18;pointer-events:none}
+.monitor-expanded{position:fixed;inset:4vh 4vw;margin:0;width:92vw;height:92vh;max-width:none;max-height:none;z-index:20000;display:flex;flex-direction:column;padding:12px;border:1px solid #55e4ce;border-radius:9px;background:#07111a;color:#e6eef5;box-shadow:0 0 0 100vmax #000b}
+.monitor-expanded>header{display:flex;justify-content:space-between;gap:10px;font-size:18px}.monitor-expanded>header button{padding:5px 12px;border:1px solid #294052;border-radius:4px}
+.monitor-tile[data-compact=true] .video-phase-card>div:nth-child(2)>div>p:nth-child(2),.monitor-tile[data-compact=true] .video-phase-legend{display:none}
+@container(max-height:200px){.monitor-tile-body .video-phase-card>div:first-child{display:none}.monitor-tile-body .video-phase-card>input{display:none}.monitor-tile-body .video-phase-details{font-size:14px}.monitor-tile-body .video-phase-card>svg{min-height:30px!important}.monitor-tile-body .video-phase-card .text-2xl{font-size:22px!important}}
+@container(max-height:140px){.monitor-tile-body .video-phase-card>div.grid{display:none}.monitor-tile-body .video-phase-card>svg{min-height:25px!important}.monitor-tile-body .video-phase-details{font-size:14px}}
+@container(max-height:95px){.monitor-tile-body .video-phase-card>svg{display:none}.monitor-tile-body .video-phase-card{justify-content:space-between}}
+@container(max-height:180px){.monitor-tile-body [aria-label="Physiology phase colors"]{display:none}}
+.monitor-tile-body .pressure-video-actions{flex-wrap:wrap;gap:3px}
+.monitor-tile-body .pressure-video-actions select{font-size:14px;max-width:130px}
+.monitor-tile-body .pressure-video-values{gap:4px}.monitor-tile-body .pressure-video-values strong{font-size:clamp(24px,8cqw,50px)}
+.monitor-tile-body .pressure-video-values :is(small,span){font-size:14px}
+.monitor-tile-body .pressure-video-card>header{flex-wrap:wrap;gap:3px}.monitor-tile-body .pressure-video-card>svg{flex:1;min-height:30px}
+@container(max-height:200px){.monitor-tile-body .pressure-video-values>div:not(:first-child),.monitor-tile-body .pressure-video-card>.civet-rhythm,.monitor-tile-body .pressure-video-card>footer{display:none}.monitor-tile-body .pressure-video-values{display:block}.monitor-tile-body .pressure-video-values>div:first-child{display:flex;gap:8px;align-items:baseline}.monitor-tile-body .pressure-video-card>header>b{display:none}.monitor-tile-body .pressure-video-card>.civet-state{font-size:14px;min-height:0}}
+@container(max-height:130px){.monitor-tile-body .pressure-video-card>header{display:none}.monitor-tile-body .pressure-video-card{gap:2px}.monitor-tile-body .pressure-video-values strong{font-size:24px}.monitor-tile-body .pressure-video-card>svg{min-height:24px}}
+@container(max-height:180px){.monitor-tile-body>[aria-label="Howl settings timeline"]>div:first-child,.monitor-tile-body>[aria-label="Howl settings timeline"]>details{display:none}.monitor-tile-body>[aria-label="Howl settings timeline"]>p{margin:0!important;flex:none}}
+.single-window-telemetry{background:#02060b;border:1px solid #16283a;border-radius:8px;padding:3px!important;gap:4px!important;overflow:hidden!important}
+.single-window-telemetry>.video-phase-voice{flex:none}
+.telemetry-monitor{padding:6px;gap:4px;background:#02060b;color:#e6eef5;overflow:hidden}
+.telemetry-monitor .monitor-dashboard{overflow:hidden;min-height:0;flex:1}
+.telemetry-monitor .monitor-events{min-height:0;max-height:22vh;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.monitor-events .video-event-context{background:#07111a;border:1px solid #203343;padding:6px 8px;min-height:0}
+.monitor-events .video-event-context header{color:#8ca3b8;font-size:14px}.monitor-events .video-event-context p{font-size:16px;line-height:1.2;margin:2px 0}
+.monitor-events .video-event-context footer{font-size:14px;gap:3px 10px}
+.monitor-events .video-event-context-main{height:auto;overflow:visible;padding:0;border:0;background:transparent}
+.telemetry-monitor.monitor-immersive{padding:0;gap:4px}
+.monitor-immersive>.monitor-toolbar,.monitor-immersive>.relative,.monitor-immersive>.video-channel-picker,.monitor-immersive>.video-phase-voice,.monitor-immersive>.video-phase-voice-controls{display:none!important}
+.monitor-immersive .monitor-layout-tools{display:none!important}
+.monitor-immersive>:not(.monitor-dashboard):not(.monitor-events){display:none!important}
+@media(pointer:coarse){.monitor-tile-heading{height:34px}.monitor-tile-heading button{min-height:32px}.monitor-tile-resize{width:44px;height:44px}}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fits, place, restoreLayout, overlaps,snapOverlayBox,reflowOverlay,meaningfulOverlayOverlap } from './videoOverlayLayout.js';
+import { fits, place, restoreLayout, overlaps,projectOverlayLayout,snapOverlayBox,reflowOverlay,meaningfulOverlayOverlap } from './videoOverlayLayout.js';
 test('placement avoids neighbors and returns no space instead of overlapping',()=>{
  const a={x:0,y:0,w:.5,h:.5,opacity:.9};
  const b=place({...a}, {a}); assert.ok(b); assert.equal(overlaps(a,b),false);
@@ -12,7 +12,7 @@ test('grid snaps geometry, honors readable floors and allows a precise override'
  const original={x:.103,y:.067,w:.24,h:.25,opacity:.83};
  const moved=snapOverlayBox('metric-heart-rate',original,1200,800);assert.equal(moved.x*1200,120);assert.equal(moved.y*800,48);assert.equal(moved.opacity,.83);
  const fine=snapOverlayBox('metric-heart-rate',original,1200,800,{enabled:false});assert.equal(fine.x,original.x);
- const resized=snapOverlayBox('phase',{...original,w:.1,h:.1},1200,800,{mode:'resize'});assert.ok(resized.w*1200>=360&&resized.h*800>=340);assert.equal(resized.h*800%24,0);
+ const resized=snapOverlayBox('phase',{...original,w:.1,h:.1},1200,800,{mode:'resize'});assert.ok(resized.w*1200>=220&&resized.h*800>=150);assert.equal(resized.h*800%24,0);
 });
 
 test('edge wiggle does not move neighbors; deliberate overlaps move them to a nearby grid position',()=>{
@@ -28,4 +28,13 @@ test('legacy overlapping layouts restore every selected overlay without collisio
  assert.equal(values.length,12);
  for(let i=0;i<values.length;i++)for(let j=i+1;j<values.length;j++)assert.equal(overlaps(values[i],values[j]),false);
  assert.ok(values.every(b=>b.opacity===.7&&b.x+b.w<=1&&b.y+b.h<=1));
+});
+
+
+test('viewport projection packs reduced cards without overwriting saved geometry',()=>{
+ const original={phase:{x:.1,y:.1,w:.25,h:.3,opacity:.8},cardiac:{x:.5,y:.1,w:.3,h:.3,opacity:.9},autonomic:{x:.1,y:.5,w:.4,h:.3,opacity:.7}};
+ const snapshot=JSON.stringify(original),small=projectOverlayLayout(original,420,520),values=Object.values(small);
+ assert.equal(JSON.stringify(original),snapshot);
+ for(let i=0;i<values.length;i++){const b=values[i];assert.ok(b.x>=0&&b.y>=0&&b.x+b.w<=1.00001&&b.y+b.h<=1.00001);for(let j=i+1;j<values.length;j++)assert.equal(overlaps(b,values[j]),false);}
+ assert.deepEqual(projectOverlayLayout(original,1920,1080),original);
 });

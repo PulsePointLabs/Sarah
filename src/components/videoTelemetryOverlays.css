@@ -95,3 +95,15 @@
 :is(.video-telemetry-overlay[data-video-overlay=autonomic],.video-overlay-breakout[data-overlay-kind=autonomic]) .text-teal-500{color:#ffd43b}
 :is(.video-telemetry-overlay[data-video-overlay=autonomic],.video-overlay-breakout[data-overlay-kind=autonomic]) .text-violet-500{color:#38c8ff}
 @media(pointer:coarse){.video-overlay-handlebar{height:34px}.video-overlay-handlebar button{min-height:32px}.video-overlay-resize{width:40px;height:40px}}
+
+/* Compact projection keeps the state, score and plot; details open explicitly. */
+.video-telemetry-overlay{transition:none!important}
+.video-overlay-content.monitor-tile-body .video-phase-card{display:flex!important;flex-direction:column;gap:3px}
+.video-overlay-content.monitor-tile-body .video-phase-card>*{flex-shrink:0}
+.video-overlay-content.monitor-tile-body .video-phase-card>svg{flex:1;height:100%;min-height:35px!important}
+.video-overlay-content.monitor-tile-body :is(p,span,label,button,small){font-size:clamp(14px,2.8cqw,20px)}
+.video-overlay-content.monitor-tile-body>[data-sidebar-section]>div:first-child{flex-wrap:wrap;gap:3px}
+.video-overlay-content.monitor-tile-body .recharts-cartesian-axis-tick text{font-size:12px!important}
+@container(max-height:245px){.video-overlay-content.monitor-tile-body .video-phase-legend,.video-overlay-content.monitor-tile-body .video-phase-card>div:nth-child(2)>div>p:nth-child(2){display:none}.video-overlay-content.monitor-tile-body .video-phase-card>div:first-child h3{display:none}.video-overlay-content.monitor-tile-body .video-phase-card>input{display:none}}
+@container(max-height:180px){.video-overlay-content.monitor-tile-body .video-phase-card>div:first-child,.video-overlay-content.monitor-tile-body .video-phase-card>div.grid{display:none}.video-overlay-content.monitor-tile-body .video-phase-card .text-2xl{font-size:24px!important}}
+@container(max-height:120px){.video-overlay-content.monitor-tile-body .telemetry-metric-card>p:not(.monitor-metric-value){display:none}.video-overlay-content.monitor-tile-body .telemetry-metric-card>.monitor-metric-value{font-size:clamp(28px,min(var(--metric-width-font,30cqw),62cqh),90px)!important}.video-overlay-content.monitor-tile-body .monitor-metric-value>span{font-size:12px!important}}

@@ -1,3 +1,4 @@
+import DocumentChartContainer,{DocumentChartTooltip} from './DocumentChartContainer.jsx';
 import CivetCard from "./CivetCard.jsx";
 import {useOverlayCardSetting,VideoOverlayPreferenceScope} from './VideoOverlayPreferences.jsx';
 import VideoTelemetryOverlays from "./VideoTelemetryOverlays.jsx";
@@ -16,7 +17,6 @@ import {
   LineChart,
   ReferenceLine,
   ReferenceArea,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -109,7 +109,7 @@ function TrendChart({ readable = false, rows, lines, playheadS, xDomain, onSeek,
   const safePlayheadS = numberOrNull(playheadS);
   return (
     <div className={`${compact ? "min-h-0 flex-1" : "h-40"} w-full`}>
-      <ResponsiveContainer width="100%" height="100%">
+      <DocumentChartContainer>
         <LineChart
           data={rows}
           margin={{ top: 8, right: rightAxis ? 12 : 4, bottom: 0, left: readable ? 0 : -24 }}
@@ -147,7 +147,7 @@ function TrendChart({ readable = false, rows, lines, playheadS, xDomain, onSeek,
               stroke={episode.kind === "climax" ? "#e879f9" : "#a78bfa"} strokeWidth={1.5} strokeDasharray="3 2"
               shape={onEpisodeEdit ? (props) => <EpisodeBoundaryHandle {...props} episode={episode} boundary={boundary} domain={xDomain}
                 onPreview={onEpisodePreview} onCommit={onEpisodeEdit} onStart={onEpisodeEditStart} /> : undefined} />))}
-          <Tooltip
+          <Tooltip content={<DocumentChartTooltip/>}
             labelFormatter={(value) => `Time ${formatTime(value)}${phaseBands.find((b) => value >= b.start && value < b.end)?.label ? ` · ${phaseBands.find((b) => value >= b.start && value < b.end).label}` : ""}`}
             formatter={(value, key) => {
               const line = lines.find((candidate) => candidate.key === key);
@@ -186,7 +186,7 @@ function TrendChart({ readable = false, rows, lines, playheadS, xDomain, onSeek,
             />
           ))}
         </LineChart>
-      </ResponsiveContainer>
+      </DocumentChartContainer>
     </div>
   );
 }

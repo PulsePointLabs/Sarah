@@ -870,6 +870,19 @@ export default function VideoSyncPlayer({
   const [videoControlsHidden, setVideoControlsHidden] = useOverlayCardSetting('display.controlsHidden',false,true);
   const videoOnly = fullTelemetryView && videoControlsHidden && !telemetryWindow.target;
   const [telemetryFocus, setTelemetryFocus] = useState(false);
+  const [monitorImmersive,setMonitorImmersive]=useState(false);
+  const toggleMonitorImmersive=()=>{
+    const popup=telemetryWindow.target;if(!popup)return;
+    const next=!monitorImmersive;setMonitorImmersive(next);
+    if(next)popup.document.documentElement.requestFullscreen?.().catch(()=>{});
+    else if(popup.document.fullscreenElement)popup.document.exitFullscreen?.().catch(()=>{});
+  };
+  useEffect(()=>{
+    const popup=telemetryWindow.target;if(!popup){setMonitorImmersive(false);return;}
+    const sync=()=>{if(!popup.document.fullscreenElement)setMonitorImmersive(false);};
+    popup.document.addEventListener('fullscreenchange',sync);
+    return()=>popup.document.removeEventListener('fullscreenchange',sync);
+  },[telemetryWindow.target]);
   const [telemetryViewport, setTelemetryViewport] = useState(() => typeof window === "undefined" ? 1920 : window.innerWidth);
   const [preferredSidebarWidth, setPreferredSidebarWidth] = useState(() => {
     try { return Number(localStorage.getItem("sarah.videoSync.sidebarWidth")) || null; } catch { return null; }
@@ -2318,7 +2331,7 @@ export default function VideoSyncPlayer({
       }
       if (!inInput && !e.ctrlKey && !e.altKey && !e.metaKey) {
         const zoomKey = e.key === '+' || e.key === '=' || code === 'NumpadAdd' ? '+' : e.key === '-' || code === 'NumpadSubtract' ? '-' : null;
-        if (zoomKey || (focusedCamera && videoViewRef.current.zoom > 1 && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(code))) {
+        if (zoomKey || ((focusedCamera||e.currentTarget===telemetryWindow.target) && videoViewRef.current.zoom > 1 && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(code))) {
           e.preventDefault(); updateVideoView(zoomKey || code); return;
         }
       }
@@ -2332,10 +2345,12 @@ export default function VideoSyncPlayer({
       }
       if (isFocusShortcut({code,repeat:e.repeat,ctrlKey:e.ctrlKey,metaKey:e.metaKey,altKey:e.altKey}, active)) {
         e.preventDefault();
-        if(fullTelemetryView){setPlaybackControlsRevealed(false);setTelemetryFocus((current) => !current);}
+        if(fullTelemetryView&&telemetryWindow.target&&(e.currentTarget===telemetryWindow.target||e.target?.ownerDocument===telemetryWindow.target.document)){toggleMonitorImmersive();}
+        else if(fullTelemetryView){setPlaybackControlsRevealed(false);setTelemetryFocus((current) => !current);}
         else void toggleFullscreenOverlay();
         return;
       }
+      if(fullTelemetryView&&code==="Escape"&&monitorImmersive&&(e.currentTarget===telemetryWindow.target||e.target?.ownerDocument===telemetryWindow.target?.document)){e.preventDefault();setMonitorImmersive(false);if(telemetryWindow.target.document.fullscreenElement)telemetryWindow.target.document.exitFullscreen?.().catch(()=>{});return;}
       if (fullTelemetryView && code === "Escape" && telemetryFocus) {
         e.preventDefault();
         setTelemetryFocus(false);
@@ -2389,7 +2404,7 @@ export default function VideoSyncPlayer({
     window.addEventListener("keydown", handleKeyDown);
     telemetryWindow.target?.addEventListener("keydown", handleKeyDown);
     return () => { window.removeEventListener("keydown", handleKeyDown); telemetryWindow.target?.removeEventListener("keydown", handleKeyDown); };
-  }, [telemetryWindow.target, addingNew, fullTelemetryView, telemetryFocus, videoOnly, playheadS, lastUsedCat, setSynchronizedVideoTime, toggleQuickDictation, videoDuration, toggleFullscreenOverlay]);
+  }, [telemetryWindow.target, monitorImmersive, addingNew, fullTelemetryView, telemetryFocus, videoOnly, playheadS, lastUsedCat, setSynchronizedVideoTime, toggleQuickDictation, videoDuration, toggleFullscreenOverlay]);
 
   // Click on chart → seek video
   const handleChartClick = useCallback((data) => {
@@ -2766,7 +2781,7 @@ export default function VideoSyncPlayer({
     </>
   );
   const telemetryPanel = (
-          <aside className={telemetryWindow.target ? "telemetry-monitor dark" : "single-window-telemetry flex min-h-0 min-w-0 flex-col gap-2 overflow-hidden"}>
+          <aside className={telemetryWindow.target ? `telemetry-monitor dark ${monitorImmersive?"monitor-immersive":""}` : "single-window-telemetry flex min-h-0 min-w-0 flex-col gap-2 overflow-hidden"}>
             <VideoPhaseVoice controller={playbackPhaseVoice} />
             {telemetryWindow.target && <div className="monitor-toolbar">
               <strong className="text-primary">Telemetry | {fmtMmSs(playheadS)}</strong>
@@ -2774,7 +2789,7 @@ export default function VideoSyncPlayer({
               <button onClick={() => toggleSubjective("near_climax")}>{subjective.episodes.some(e => e.end_s == null && e.kind !== "climax") ? "End near climax (N)" : "Start near climax (N)"}</button>
               <button onClick={() => toggleSubjective("climax")}>{subjective.episodes.some(e => e.end_s == null && e.kind === "climax") ? "End climax (C)" : "Start climax (C)"}</button>
               <button onClick={() => telemetryWindow.target.dispatchEvent(new telemetryWindow.target.KeyboardEvent("keydown", {code:"KeyS",bubbles:true}))}>Annotate (S)</button>
-              <button onClick={() => telemetryWindow.target.document.fullscreenElement ? telemetryWindow.target.document.exitFullscreen() : telemetryWindow.target.document.documentElement.requestFullscreen()}>Fullscreen</button>
+              <button onClick={toggleMonitorImmersive}>Fullscreen (F)</button>
               <button onClick={telemetryWindow.close}>Single window</button>
               <span role="status">{subjective.error || (subjective.saving ? "Saving episode..." : "")}</span>
             </div>}

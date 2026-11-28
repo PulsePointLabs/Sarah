@@ -10,6 +10,8 @@ export function useTelemetryWindow() {
     popup.document.documentElement.className = document.documentElement.className;
     popup.document.body.className = 'dark';
     popup.document.body.style.margin = '0';
+    popup.document.body.style.overflow = 'hidden';
+    popup.document.documentElement.style.overflow = 'hidden';
     for (const node of document.querySelectorAll('link[rel="stylesheet"], style')) {
       const copy = node.cloneNode(true);
       if (node.tagName === 'LINK') copy.href = node.href;
